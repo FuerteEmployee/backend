@@ -34,11 +34,15 @@ const SubscriptionSchema = new mongoose.Schema({
     employeesUsed: { type: Number, default: 0 },
     mrr: { type: Number, default: 0 },  // Monthly recurring revenue
 
+    // Day-milestones (e.g. 7, 3, 1) already notified for the current period,
+    // so reminders fire at most once each. Reset when a new period begins.
+    remindersSent: { type: [Number], default: [] },
+
     // History of plan changes
     history: [{
         action: {
             type: String,
-            enum: ['created', 'upgraded', 'downgraded', 'renewed', 'cancelled', 'trial_started', 'paused', 'reactivated', 'expired'],
+            enum: ['created', 'upgraded', 'downgraded', 'renewed', 'cancelled', 'trial_started', 'paused', 'reactivated', 'grace', 'expired'],
             required: true
         },
         fromPlan: { type: mongoose.Schema.Types.ObjectId, ref: 'Plan' },

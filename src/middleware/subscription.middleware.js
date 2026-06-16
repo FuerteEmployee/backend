@@ -16,16 +16,16 @@ const checkSubscription = async (req, res, next) => {
         }
 
         if (sub.status === 'expired' || sub.status === 'cancelled') {
-            return res.status(403).json({ message: 'Subscription expired. Please renew.' });
+            return res.status(403).json({ message: 'Subscription expired. Please renew.', subscriptionStatus: sub.status });
         }
 
         if (sub.status === 'paused') {
-            return res.status(403).json({ message: 'Account paused. Please contact support.' });
+            return res.status(403).json({ message: 'Account paused. Please contact support.', subscriptionStatus: 'paused' });
         }
 
         // Check trial expiry
         if (sub.status === 'trial' && sub.trialEndDate && sub.trialEndDate < new Date()) {
-            return res.status(403).json({ message: 'Trial period ended. Please subscribe to continue.' });
+            return res.status(403).json({ message: 'Trial period ended. Please subscribe to continue.', subscriptionStatus: 'expired' });
         }
 
         // Attach subscription data for downstream use
@@ -57,7 +57,16 @@ const checkModuleAccess = (moduleName) => async (req, res, next) => {
         }
 
         if (sub.status === 'expired' || sub.status === 'cancelled') {
-            return res.status(403).json({ message: 'Subscription expired. Please renew.' });
+            return res.status(403).json({ message: 'Subscription expired. Please renew.', subscriptionStatus: sub.status });
+        }
+
+        if (sub.status === 'paused') {
+            return res.status(403).json({ message: 'Account paused. Please contact support.', subscriptionStatus: 'paused' });
+        }
+
+        // A trial whose window has elapsed but hasn't been flipped yet by the cron.
+        if (sub.status === 'trial' && sub.trialEndDate && sub.trialEndDate < new Date()) {
+            return res.status(403).json({ message: 'Trial period ended. Please subscribe to continue.', subscriptionStatus: 'expired' });
         }
 
         const moduleValue = sub.planId.modules?.[moduleName];

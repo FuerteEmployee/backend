@@ -54,6 +54,7 @@ app.use("/api/leads", require("./routes/lead_routes"));
 app.use("/api/settings", require("./routes/settings_routes"));
 app.use("/api/leaves", require("./routes/leave_routes"));
 app.use("/api/superadmin", require("./routes/superadmin_routes"));
+app.use("/api/cron", require("./routes/cron_routes"));
 
 // Base route
 app.get("/", (req, res) => {

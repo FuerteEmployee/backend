@@ -125,6 +125,61 @@ exports.getProfile = async (req, res) => {
     }
 };
 
+// Return the current tenant's subscription status for the logged-in admin/subadmin.
+// Intentionally NOT gated by subscription middleware so the frontend can still
+// read the status (and render the trial/expired notice) even after expiry.
+exports.getMySubscription = async (req, res) => {
+    try {
+        // Superadmins have no tenant subscription of their own.
+        if (req.user?.role === 'superadmin') {
+            return res.json({ status: 'none' });
+        }
+
+        const sub = await Subscription.findOne({ adminId: req.adminId }).populate('planId');
+
+        // Legacy tenants without a subscription record are treated as unrestricted.
+        if (!sub) {
+            return res.json({ status: 'none' });
+        }
+
+        const now = new Date();
+        const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+        // The relevant deadline depends on where the tenant is in its lifecycle.
+        let deadline = null;
+        if (sub.status === 'trial') deadline = sub.trialEndDate;
+        else if (sub.status === 'grace') deadline = sub.graceEndDate || sub.currentPeriodEnd;
+        else if (sub.status === 'active') deadline = sub.currentPeriodEnd;
+
+        const daysRemaining = deadline
+            ? Math.max(0, Math.ceil((new Date(deadline).getTime() - now.getTime()) / MS_PER_DAY))
+            : null;
+
+        // A trial whose end date has passed is effectively expired even if a cron
+        // hasn't flipped the status yet — surface that to the client.
+        const effectiveStatus =
+            sub.status === 'trial' && sub.trialEndDate && new Date(sub.trialEndDate) < now
+                ? 'expired'
+                : sub.status;
+
+        res.json({
+            status: effectiveStatus,
+            rawStatus: sub.status,
+            planName: sub.planId?.name || null,
+            planSlug: sub.planId?.slug || null,
+            billingCycle: sub.billingCycle,
+            trialEndDate: sub.trialEndDate,
+            currentPeriodEnd: sub.currentPeriodEnd,
+            graceEndDate: sub.graceEndDate,
+            daysRemaining,
+            employeesUsed: sub.employeesUsed,
+            maxEmployees: sub.planId?.maxEmployees ?? null,
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
 exports.updateProfile = async (req, res) => {
     try {
         const updateData = { ...req.body };
