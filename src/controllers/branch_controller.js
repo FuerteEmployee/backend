@@ -1,5 +1,6 @@
 const Branch = require('../models/Branch');
 const Subscription = require('../models/Subscription');
+const User = require('../models/User');
 const mongoose = require('mongoose');
 
 exports.getBranches = async (req, res) => {
@@ -7,10 +8,22 @@ exports.getBranches = async (req, res) => {
         const branches = await Branch.aggregate([
             { $match: { adminId: new mongoose.Types.ObjectId(req.adminId) } },
             {
+                // Count employees whose primary branch OR any of their multiple branches is this branch
                 $lookup: {
                     from: 'users',
-                    localField: '_id',
-                    foreignField: 'branchId',
+                    let: { branchId: '$_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $or: [
+                                        { $eq: ['$branchId', '$$branchId'] },
+                                        { $in: ['$$branchId', { $ifNull: ['$branchIds', []] }] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
                     as: 'employees'
                 }
             },
@@ -79,11 +92,24 @@ exports.updateBranch = async (req, res) => {
 
 exports.deleteBranch = async (req, res) => {
     try {
-        const branch = await Branch.findOneAndDelete({ 
-            _id: req.params.id, 
-            adminId: new mongoose.Types.ObjectId(req.adminId) 
-        });
+        const adminId = new mongoose.Types.ObjectId(req.adminId);
+        const branch = await Branch.findOneAndDelete({ _id: req.params.id, adminId });
         if (!branch) return res.status(404).json({ message: 'Branch not found' });
+
+        // Clean up references on employees so no one points to a deleted branch.
+        // 1. Remove it from everyone's multi-branch list.
+        await User.updateMany(
+            { adminId, branchIds: branch._id },
+            { $pull: { branchIds: branch._id } }
+        );
+        // 2. Re-point anyone whose PRIMARY branch was this one to their first
+        //    remaining branch (or null if they have none left).
+        const affected = await User.find({ adminId, branchId: branch._id });
+        for (const u of affected) {
+            u.branchId = (u.branchIds && u.branchIds.length > 0) ? u.branchIds[0] : null;
+            await u.save();
+        }
+
         res.json({ message: 'Branch removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });

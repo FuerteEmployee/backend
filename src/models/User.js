@@ -27,7 +27,8 @@ const UserSchema = new mongoose.Schema({
     
     // Employee specific fields
     departmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Department' },
-    branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch' },
+    branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }, // primary branch (kept for backward compatibility)
+    branchIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }], // all branches when multi-branch is enabled
     salary: { type: Number, default: 0 },
     shiftId: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift' },
     profileImage: { type: String },

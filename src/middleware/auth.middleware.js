@@ -33,10 +33,8 @@ const protect = async (req, res, next) => {
             // Make the full user record (incl. permissions) available downstream
             req.currentUser = user;
 
-            // Reject if this token was superseded by a login on another device
-            if (user.activeToken && token !== user.activeToken) {
-                return res.status(401).json({ message: 'Session expired. You have been signed in on another device.', code: 'another_device' });
-            }
+            // Multiple-device login is allowed: do not reject tokens superseded
+            // by a login on another device. (Single-device enforcement disabled.)
 
             // Super admins bypass tenant checks entirely
             if (user.role === 'superadmin') {

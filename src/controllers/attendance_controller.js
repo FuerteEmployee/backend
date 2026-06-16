@@ -6,7 +6,7 @@ const Settings = require('../models/Settings');
 const Festival = require('../models/Festival');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
-const { calculateDistance } = require('../utils/distance');
+const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
 const { isWeeklyOff } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
@@ -75,7 +75,7 @@ exports.punchIn = async (req, res) => {
         });
 
         // 2. Fetch User, Shift and Settings
-        const user = await User.findById(employeeId).populate('shiftId branchId');
+        const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
 
         const allowMultiple = settings?.attendance?.allowMultiplePunches || false;
@@ -126,16 +126,14 @@ exports.punchIn = async (req, res) => {
             return res.status(403).json({ message: 'Remote punch (Work From Home) is disabled for your account.' });
         }
 
-        // 4. Geofencing check (Skip if WFH)
+        // 4. Geofencing check (Skip if WFH) — pass if near ANY assigned branch
         if (!isWFH && rules.requireLocation) {
-            if (!user.branchId) {
+            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+            if (branches.length === 0) {
                 return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
             }
 
-            const distance = calculateDistance(
-                location?.lat, location?.lng,
-                user.branchId.latitude, user.branchId.longitude
-            );
+            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
 
             if (distance > 300) { // 300 meters limit (generous for GPS inaccuracy)
                 return res.status(400).json({
@@ -217,18 +215,16 @@ exports.punchOut = async (req, res) => {
         }
 
         // --- Geofencing check for Punch-Out ---
-        const user = await User.findById(employeeId).populate('branchId');
+        const user = await User.findById(employeeId).populate('branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
         if (rules.requireLocation && attendance.remarks !== 'Work From Home') {
-            if (!user.branchId) {
+            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+            if (branches.length === 0) {
                 return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
             }
-            const distance = calculateDistance(
-                location?.lat, location?.lng,
-                user.branchId.latitude, user.branchId.longitude
-            );
+            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
             if (distance > 300) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
@@ -305,18 +301,16 @@ exports.lunchIn = async (req, res) => {
         }
 
         // --- Geofencing check for Lunch-In ---
-        const user = await User.findById(employeeId).populate('branchId');
+        const user = await User.findById(employeeId).populate('branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
         if (rules.requireLocation && attendance.remarks !== 'Work From Home') {
-            if (!user.branchId) {
+            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+            if (branches.length === 0) {
                 return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
             }
-            const distance = calculateDistance(
-                location?.lat, location?.lng,
-                user.branchId.latitude, user.branchId.longitude
-            );
+            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
             if (distance > 300) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
@@ -366,18 +360,16 @@ exports.lunchOut = async (req, res) => {
         }
 
         // --- Geofencing check for Lunch-Out ---
-        const user = await User.findById(employeeId).populate('branchId');
+        const user = await User.findById(employeeId).populate('branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
         if (rules.requireLocation && attendance.remarks !== 'Work From Home') {
-            if (!user.branchId) {
+            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+            if (branches.length === 0) {
                 return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
             }
-            const distance = calculateDistance(
-                location?.lat, location?.lng,
-                user.branchId.latitude, user.branchId.longitude
-            );
+            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
             if (distance > 300) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }

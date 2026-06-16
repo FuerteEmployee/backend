@@ -25,6 +25,12 @@ const SettingsSchema = new mongoose.Schema({
     appearance: {
         defaultLayout: { type: String, enum: ['grid', 'list'], default: 'list' }
     },
+
+    // Branch Configuration
+    branchSettings: {
+        // When enabled, an employee can be assigned to more than one branch.
+        allowMultipleBranches: { type: Boolean, default: false }
+    },
     
     // Salary Templates
     salaryTemplates: [{

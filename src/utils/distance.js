@@ -23,4 +23,21 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     return R * c; // Distance in meters
 }
 
-module.exports = { calculateDistance };
+/**
+ * Returns the distance (meters) to the CLOSEST branch among a list of branches.
+ * Used for multi-branch employees: they may punch in at any of their branches.
+ * @param {number} lat - Latitude of the user
+ * @param {number} lng - Longitude of the user
+ * @param {Array<{latitude:number, longitude:number}>} branches - Populated branch docs
+ * @returns {number} - Distance in meters to the nearest branch (Infinity if none valid)
+ */
+function nearestBranchDistance(lat, lng, branches) {
+    if (!Array.isArray(branches) || branches.length === 0) return Infinity;
+    return branches.reduce((min, b) => {
+        if (!b || b.latitude == null || b.longitude == null) return min;
+        const d = calculateDistance(lat, lng, b.latitude, b.longitude);
+        return d < min ? d : min;
+    }, Infinity);
+}
+
+module.exports = { calculateDistance, nearestBranchDistance };

@@ -92,7 +92,7 @@ exports.verifyOtp = async (req, res) => {
 
 exports.getProfile = async (req, res) => {
     try {
-        const user = await User.findById(req.userId).populate('shiftId branchId departmentId');
+        const user = await User.findById(req.userId).populate('shiftId branchId branchIds departmentId');
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         const today = new Date();
@@ -155,7 +155,7 @@ exports.getUsers = async (req, res) => {
         if (search) query.name = { $regex: search, $options: 'i' };
 
         const users = await User.find(query)
-            .populate('departmentId branchId shiftId')
+            .populate('departmentId branchId branchIds shiftId')
             .limit(limit * 1)
             .skip((page - 1) * limit)
             .sort({ createdAt: -1 });
@@ -175,7 +175,7 @@ exports.getUsers = async (req, res) => {
 exports.getEmployees = async (req, res) => {
     try {
         const employees = await User.find({ adminId: new mongoose.Types.ObjectId(req.adminId), role: 'employee' })
-            .populate('departmentId branchId shiftId')
+            .populate('departmentId branchId branchIds shiftId')
             .sort({ createdAt: -1 });
         res.json(employees);
     } catch (error) {
@@ -193,6 +193,14 @@ exports.createUser = async (req, res) => {
                 delete userData[field];
             }
         });
+
+        // Multi-branch support: keep primary branchId in sync with branchIds
+        if (Array.isArray(userData.branchIds)) {
+            userData.branchIds = userData.branchIds.filter(Boolean);
+            if (userData.branchIds.length > 0) {
+                userData.branchId = userData.branchIds[0];
+            }
+        }
 
         // Enforce employee seat limit check
         if (userData.role === 'employee' && req.adminId) {
@@ -238,6 +246,12 @@ exports.updateUser = async (req, res) => {
                 updateData[field] = null;
             }
         });
+
+        // Multi-branch support: keep primary branchId in sync with branchIds
+        if (Array.isArray(updateData.branchIds)) {
+            updateData.branchIds = updateData.branchIds.filter(Boolean);
+            updateData.branchId = updateData.branchIds.length > 0 ? updateData.branchIds[0] : null;
+        }
 
         const user = await User.findOneAndUpdate(
             { _id: req.params.id, adminId: new mongoose.Types.ObjectId(req.adminId) },
