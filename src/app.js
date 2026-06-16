@@ -16,7 +16,11 @@ const allowedOrigins = [
     "http://localhost:4173",
     "https://api.beontimeofficial.com",
 
-    
+    // Capacitor native apps (Android/iOS WebView origins)
+    "https://localhost",
+    "http://localhost",
+    "capacitor://localhost",
+    "ionic://localhost",
 ];
 
 app.use(
