@@ -30,7 +30,7 @@ exports.loginRequest = async (req, res) => {
         const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
         if (!user) {
-            return res.status(404).json({ message: 'Account not found. Please contact support.' });
+            return res.status(404).json({ message: 'You are not registered. Please contact your admin to register you first.' });
         }
 
         // Update existing user with OTP
