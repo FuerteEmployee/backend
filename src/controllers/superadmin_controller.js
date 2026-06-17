@@ -282,7 +282,7 @@ exports.getTenant = async (req, res) => {
 
 exports.updateTenant = async (req, res) => {
     try {
-        const { planId, status, billingCycle, trialEndDate, note } = req.body;
+        const { planId, status, billingCycle, trialEndDate, bannerThresholdDays, note } = req.body;
 
         const sub = await Subscription.findOne({ adminId: req.params.id }).populate('planId');
         if (!sub) {
@@ -320,6 +320,10 @@ exports.updateTenant = async (req, res) => {
         }
         if (billingCycle) sub.billingCycle = billingCycle;
         if (trialEndDate) sub.trialEndDate = new Date(trialEndDate);
+        if (bannerThresholdDays !== undefined && bannerThresholdDays !== null && bannerThresholdDays !== '') {
+            const n = Math.max(0, Math.min(365, Math.round(Number(bannerThresholdDays))));
+            if (!Number.isNaN(n)) sub.bannerThresholdDays = n;
+        }
 
         // Recompute MRR centrally: only an *active* subscription contributes
         // recurring revenue. Trials/paused/expired/cancelled are ₹0. This keeps
@@ -348,7 +352,7 @@ exports.updateTenant = async (req, res) => {
 
 exports.createTenant = async (req, res) => {
     try {
-        const { name, phone, email, planId, billingCycle = 'monthly' } = req.body;
+        const { name, phone, email, planId, billingCycle = 'monthly', bannerThresholdDays } = req.body;
 
         // Create the admin user
         const admin = await User.create({
@@ -375,6 +379,10 @@ exports.createTenant = async (req, res) => {
             planId: plan._id,
             status: 'trial',
             billingCycle,
+            bannerThresholdDays:
+                bannerThresholdDays !== undefined && bannerThresholdDays !== null && bannerThresholdDays !== ''
+                    ? Math.max(0, Math.min(365, Math.round(Number(bannerThresholdDays)) || 7))
+                    : 7,
             trialStartDate: now,
             trialEndDate: trialEnd,
             currentPeriodStart: now,

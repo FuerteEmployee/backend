@@ -172,7 +172,9 @@ exports.getMySubscription = async (req, res) => {
             trialEndDate: sub.trialEndDate,
             currentPeriodEnd: sub.currentPeriodEnd,
             graceEndDate: sub.graceEndDate,
+            deadline,
             daysRemaining,
+            bannerThresholdDays: sub.bannerThresholdDays ?? 7,
             employeesUsed: sub.employeesUsed,
             maxEmployees: sub.planId?.maxEmployees ?? null,
         });

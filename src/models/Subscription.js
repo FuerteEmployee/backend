@@ -34,6 +34,10 @@ const SubscriptionSchema = new mongoose.Schema({
     employeesUsed: { type: Number, default: 0 },
     mrr: { type: Number, default: 0 },  // Monthly recurring revenue
 
+    // How many days before the deadline the tenant's trial/renewal banner starts
+    // showing (with a live countdown). Set per-tenant by the super admin.
+    bannerThresholdDays: { type: Number, default: 7 },
+
     // Day-milestones (e.g. 7, 3, 1) already notified for the current period,
     // so reminders fire at most once each. Reset when a new period begins.
     remindersSent: { type: [Number], default: [] },
