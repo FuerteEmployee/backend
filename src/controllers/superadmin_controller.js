@@ -11,6 +11,7 @@ const Branch = require('../models/Branch');
 const Department = require('../models/Department');
 const Expense = require('../models/Expense');
 const mongoose = require('mongoose');
+const { friendlyMongooseError } = require('../utils/mongoose_errors');
 
 // ─── OVERVIEW / DASHBOARD ────────────────────────────────────────────────────
 
@@ -395,7 +396,8 @@ exports.createTenant = async (req, res) => {
         res.status(201).json(result);
     } catch (error) {
         console.error('Create tenant error:', error);
-        res.status(400).json({ message: error.message });
+        const { status, message } = friendlyMongooseError(error);
+        res.status(status).json({ message });
     }
 };
 

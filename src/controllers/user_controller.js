@@ -4,6 +4,7 @@ const Festival = require('../models/Festival');
 const Subscription = require('../models/Subscription');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
+const { friendlyMongooseError } = require('../utils/mongoose_errors');
 
 // Generate JWT
 const generateToken = (user) => {
@@ -287,7 +288,8 @@ exports.createUser = async (req, res) => {
 
         res.status(201).json(user);
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        const { status, message } = friendlyMongooseError(error);
+        res.status(status).json({ message });
     }
 };
 
@@ -316,7 +318,8 @@ exports.updateUser = async (req, res) => {
         if (!user) return res.status(404).json({ message: 'User not found' });
         res.json(user);
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        const { status, message } = friendlyMongooseError(error);
+        res.status(status).json({ message });
     }
 };
 
