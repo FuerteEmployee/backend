@@ -352,7 +352,10 @@ exports.updateTenant = async (req, res) => {
 
 exports.createTenant = async (req, res) => {
     try {
-        const { name, phone, email, planId, billingCycle = 'monthly', bannerThresholdDays } = req.body;
+        const {
+            name, phone, email, planId, billingCycle = 'monthly',
+            bannerThresholdDays, status = 'trial', trialDays,
+        } = req.body;
 
         // Create the admin user
         const admin = await User.create({
@@ -371,31 +374,58 @@ exports.createTenant = async (req, res) => {
         }
 
         const now = new Date();
-        const trialEnd = new Date(now.getTime() + (plan.trialDays || 14) * 24 * 60 * 60 * 1000);
+        const MS_DAY = 24 * 60 * 60 * 1000;
 
-        // Create subscription
-        const sub = await Subscription.create({
-            adminId: admin._id,
-            planId: plan._id,
-            status: 'trial',
-            billingCycle,
-            bannerThresholdDays:
-                bannerThresholdDays !== undefined && bannerThresholdDays !== null && bannerThresholdDays !== ''
-                    ? Math.max(0, Math.min(365, Math.round(Number(bannerThresholdDays)) || 7))
-                    : 7,
-            trialStartDate: now,
-            trialEndDate: trialEnd,
-            currentPeriodStart: now,
-            currentPeriodEnd: trialEnd,
-            employeesUsed: 0,
-            mrr: 0,
-            history: [{
-                action: 'trial_started',
-                toPlan: plan._id,
-                date: now,
-                note: 'Tenant created by super admin'
-            }]
-        });
+        const clampedThreshold =
+            bannerThresholdDays !== undefined && bannerThresholdDays !== null && bannerThresholdDays !== ''
+                ? Math.max(0, Math.min(365, Math.round(Number(bannerThresholdDays)) || 7))
+                : 7;
+
+        // Super admin decides: start the tenant on a paid plan ("active") or give
+        // a trial, and (for trials) how many days. Falls back to the plan's
+        // configured trialDays, then 14.
+        const startActive = status === 'active';
+
+        const sub = await Subscription.create(
+            startActive
+                ? (() => {
+                    const periodEnd = new Date(now.getTime() + (billingCycle === 'annual' ? 365 : 30) * MS_DAY);
+                    return {
+                        adminId: admin._id,
+                        planId: plan._id,
+                        status: 'active',
+                        billingCycle,
+                        bannerThresholdDays: clampedThreshold,
+                        currentPeriodStart: now,
+                        currentPeriodEnd: periodEnd,
+                        employeesUsed: 0,
+                        mrr: billingCycle === 'annual'
+                            ? Math.round((plan.annualPrice || plan.price * 12) / 12)
+                            : plan.price,
+                        history: [{ action: 'created', toPlan: plan._id, date: now, note: 'Created active by super admin' }],
+                    };
+                })()
+                : (() => {
+                    const days = (trialDays !== undefined && trialDays !== null && trialDays !== '' && !Number.isNaN(Number(trialDays)))
+                        ? Math.max(0, Math.min(365, Math.round(Number(trialDays))))
+                        : (plan.trialDays || 14);
+                    const trialEnd = new Date(now.getTime() + days * MS_DAY);
+                    return {
+                        adminId: admin._id,
+                        planId: plan._id,
+                        status: 'trial',
+                        billingCycle,
+                        bannerThresholdDays: clampedThreshold,
+                        trialStartDate: now,
+                        trialEndDate: trialEnd,
+                        currentPeriodStart: now,
+                        currentPeriodEnd: trialEnd,
+                        employeesUsed: 0,
+                        mrr: 0,
+                        history: [{ action: 'trial_started', toPlan: plan._id, date: now, note: `Trial (${days}d) created by super admin` }],
+                    };
+                })()
+        );
 
         const result = await Subscription.findById(sub._id)
             .populate('adminId', 'name phone email')

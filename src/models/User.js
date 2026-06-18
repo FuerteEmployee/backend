@@ -90,11 +90,30 @@ const UserSchema = new mongoose.Schema({
         bonus: { enabled: { type: Boolean, default: false }, percentage: { type: Number, default: 0 }, amount: { type: Number, default: 0 }, type: { type: String, enum: ['percentage', 'amount'], default: 'percentage' }, includeInTotal: { type: Boolean, default: true } },
     },
     
+    // Per-employee payroll override. When overrideGlobal is true, any field set
+    // here wins over the tenant Settings.payroll value; unset fields fall back
+    // to the tenant config. Mirrors attendanceExceptions/weeklyHolidays pattern.
+    payrollOverride: {
+        overrideGlobal: { type: Boolean, default: false },
+        dailyRateBasis: { type: String, enum: ['calendar', 'fixed30', 'fixed26', 'workingDay'] },
+        sandwichRuleEnabled: { type: Boolean },
+        bucketWeights: {
+            present: { type: Number, min: 0, max: 1 },
+            wfh: { type: Number, min: 0, max: 1 },
+            halfDay: { type: Number, min: 0, max: 1 },
+            paidLeave: { type: Number, min: 0, max: 1 },
+            weeklyOff: { type: Number, min: 0, max: 1 },
+            holiday: { type: Number, min: 0, max: 1 },
+            absent: { type: Number, min: 0, max: 1 },
+            unpaidLeave: { type: Number, min: 0, max: 1 },
+        },
+    },
+
     // Common fields
-    status: { 
-        type: String, 
-        enum: ['active', 'inactive'], 
-        default: 'active' 
+    status: {
+        type: String,
+        enum: ['active', 'inactive'],
+        default: 'active'
     },
     isActive: { type: Boolean, default: true }, // For Admin tenant status
     permissions: { type: mongoose.Schema.Types.Mixed, default: null },

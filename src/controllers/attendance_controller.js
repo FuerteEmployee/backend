@@ -160,6 +160,9 @@ exports.punchIn = async (req, res) => {
         // 4. Perform Uploads in Parallel for Speed
         const photoUrl = photo ? await uploadToCloudinary(photo) : null;
 
+        // WFH is a first-class status; wasLate will be set on punch-out so the
+        // flag survives the status normalisation (late → present/half-day).
+        const finalStatus = isWFH ? 'wfh' : status;
         attendance = new Attendance({
             adminId: req.adminId,
             employeeId,
@@ -168,7 +171,8 @@ exports.punchIn = async (req, res) => {
             punchInLocation: address || "Location provided by user",
             punchInCoordinates: location || null,
             punchInPhoto: photoUrl,
-            status,
+            status: finalStatus,
+            isWFH: !!isWFH,
             remarks: isWFH ? 'Work From Home' : '',
             punchOut: null,
             lunchInTime: null,
@@ -251,14 +255,61 @@ exports.punchOut = async (req, res) => {
             attendance.totalWorkMs = (attendance.totalWorkMs || 0) + workMillis;
         }
 
-        // 5. Calculate Half Day Status
-        const halfDayThreshold = settings?.attendance?.halfDayHours || 4;
+        // 5. Preserve punctuality signal before status is normalised.
+        // status 'late' gets overwritten below, but wasLate survives so the
+        // payroll engine (and analytics) can still read it.
+        if (attendance.status === 'late') attendance.wasLate = true;
 
-        const workHours = (attendance.totalWorkMs || (attendance.punchOut - attendance.punchIn)) / (1000 * 60 * 60);
+        // 6. Apply configurable half-day rules.
+        const hdr = settings?.attendance?.halfDayRules || {};
+        const hdMethod = hdr.method || 'durationBased';
+        const hdBothLogic = hdr.bothLogic || 'or';
+        const hdCutoff = hdr.cutoffTime || '09:35';
+        const hdMinHours = hdr.minHours != null ? hdr.minHours : (settings?.attendance?.halfDayHours ?? 4);
+        const hdDeductLunch = hdr.deductLunch !== false; // default true
 
-        if (workHours < halfDayThreshold) {
+        // Net worked time (ms). Start from totalWorkMs which already tracks multi-punch shifts.
+        let netWorkMs = attendance.totalWorkMs || (attendance.punchOut - attendance.punchIn);
+        if (hdDeductLunch && attendance.lunchInTime && attendance.lunchOutTime) {
+            const lunchMs = new Date(attendance.lunchOutTime) - new Date(attendance.lunchInTime);
+            if (lunchMs > 0) netWorkMs = Math.max(0, netWorkMs - lunchMs);
+        }
+        const netWorkHours = netWorkMs / (1000 * 60 * 60);
+
+        // Time-based: punch-in strictly after cutoffTime = late arrival.
+        // Grace rule: 09:35:00 is still on time; 09:35:01 is late.
+        let isLateArrival = false;
+        if (attendance.punchIn) {
+            const [cutH, cutM] = hdCutoff.split(':').map(Number);
+            const pi = new Date(attendance.punchIn);
+            const piMins = pi.getHours() * 60 + pi.getMinutes();
+            const piSecs = pi.getSeconds();
+            const cutMins = cutH * 60 + cutM;
+            isLateArrival = piMins > cutMins || (piMins === cutMins && piSecs > 0);
+        }
+
+        // Duration-based: net hours below minimum = short day.
+        const isShortDay = netWorkHours < hdMinHours;
+
+        let isHalfDay = false;
+        if (hdMethod === 'timeBased') {
+            isHalfDay = isLateArrival;
+        } else if (hdMethod === 'durationBased') {
+            isHalfDay = isShortDay;
+        } else { // 'both'
+            isHalfDay = hdBothLogic === 'or' ? (isLateArrival || isShortDay) : (isLateArrival && isShortDay);
+        }
+
+        const remarkParts = [];
+        if (isLateArrival && (hdMethod !== 'durationBased')) remarkParts.push(`Late arrival (after ${hdCutoff})`);
+        if (isShortDay && (hdMethod !== 'timeBased')) remarkParts.push(`Short hours (${netWorkHours.toFixed(2)}h < ${hdMinHours}h)`);
+
+        if (isHalfDay) {
             attendance.status = 'half-day';
-            attendance.remarks = (attendance.remarks || '') + ` | Short Work Day (${workHours.toFixed(2)} hrs)`;
+            const detail = remarkParts.length ? ` | ${remarkParts.join('; ')}` : '';
+            attendance.remarks = (attendance.remarks || '') + detail;
+        } else if (attendance.isWFH) {
+            attendance.status = 'wfh'; // keep WFH bucket, don't collapse to 'present'
         } else {
             attendance.status = 'present';
         }
@@ -284,12 +335,13 @@ exports.lunchIn = async (req, res) => {
     try {
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
-        const today = new Date().setHours(0, 0, 0, 0);
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
-            date: { $gte: today }
+            date: { $gte: todayStart, $lte: todayEnd }
         });
 
         if (!attendance) {
@@ -335,12 +387,13 @@ exports.lunchOut = async (req, res) => {
     try {
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
-        const today = new Date().setHours(0, 0, 0, 0);
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
-            date: { $gte: today }
+            date: { $gte: todayStart, $lte: todayEnd }
         });
 
         if (!attendance) {
@@ -447,7 +500,7 @@ exports.getEmployeeHistory = async (req, res) => {
         const [user, settings, history, festivals] = await Promise.all([
             User.findById(employeeId),
             Settings.findOne({ adminId: req.adminId }),
-            Attendance.find({ employeeId, date: { $gte: startDate, $lte: endDate } }),
+            Attendance.find({ adminId: req.adminId, employeeId, date: { $gte: startDate, $lte: endDate } }),
             Festival.find({
                 adminId: req.adminId,
                 $or: [

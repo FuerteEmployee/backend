@@ -1,5 +1,7 @@
 ﻿const Leave = require('../models/Leave');
+const User = require('../models/User');
 const mongoose = require('mongoose');
+const { calculateAndSaveSalary } = require('./salary_controller');
 
 // Fetch all leaves for the tenant (filtered by employee, status, leave type)
 exports.getLeaves = async (req, res) => {
@@ -83,6 +85,33 @@ exports.updateLeaveStatus = async (req, res) => {
         }
 
         res.json(leave);
+
+        // Background salary recompute when leave is approved or rejected (status changed).
+        // Recomputes every month the leave span touches so the payroll stays accurate.
+        if (status && status !== 'pending') {
+            (async () => {
+                try {
+                    const emp = await User.findById(leave.employeeId._id || leave.employeeId);
+                    if (!emp) return;
+                    // Collect unique year+month pairs covered by the leave span.
+                    // Jump to 1st of each month before incrementing so day-overflow
+                    // (e.g. Jan 31 + 1 month = Mar 3) can never skip a month.
+                    const months = new Set();
+                    let cur = new Date(leave.startDate);
+                    const last = new Date(leave.endDate || leave.startDate);
+                    while (cur <= last) {
+                        months.add(`${cur.getFullYear()}-${cur.getMonth() + 1}`);
+                        cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+                    }
+                    for (const key of months) {
+                        const [y, m] = key.split('-').map(Number);
+                        await calculateAndSaveSalary(leave.adminId, emp, m, y);
+                    }
+                } catch (err) {
+                    console.error('Leave approval salary sync error:', err);
+                }
+            })();
+        }
     } catch (error) {
         res.status(400).json({ message: error.message });
     }

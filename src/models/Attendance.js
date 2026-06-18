@@ -20,9 +20,16 @@ const AttendanceSchema = new mongoose.Schema({
     lunchOutCoordinates: { lat: { type: Number }, lng: { type: Number } },
     status: {
         type: String,
-        enum: ['present', 'absent', 'half-day', 'late'],
+        enum: ['present', 'absent', 'half-day', 'late', 'wfh'],
         default: 'absent',
     },
+    // Work-from-home flag — first-class signal (was previously only a remarks
+    // substring). Set on punch-in; lets payroll pay WFH at its own weight.
+    isWFH: { type: Boolean, default: false },
+    // Persistent punctuality signal that survives punch-out normalisation
+    // (status 'late' used to be overwritten to 'present' on punch-out, making
+    // punctuality unrecoverable). True when the punch-in was within grace.
+    wasLate: { type: Boolean, default: false },
     shifts: [{
         punchIn: { type: Date },
         punchOut: { type: Date }

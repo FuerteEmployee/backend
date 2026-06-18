@@ -25,4 +25,18 @@ const isWeeklyOff = (dayName, dateDay, weeklyHolidays, globalWorkDays) => {
   return offDays.includes(dayName);
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff };
+/**
+ * Local-time YYYY-MM-DD key. Using toISOString() keys days in UTC, which on an
+ * IST (UTC+5:30) server rolls near-midnight timestamps to the wrong day and
+ * misaligns attendance vs the day-by-day classification window. Always key days
+ * with this helper when the payroll engine relies on day alignment.
+ */
+const toLocalDateKey = (date) => {
+  const d = new Date(date);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey };
