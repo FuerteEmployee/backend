@@ -115,9 +115,10 @@ const createAdvanceSalaryRequest = async (req, res) => {
             status: 'pending'
         });
 
-        const populated = await request
-            .populate('employeeId', 'name phone email profileImage')
-            .populate('branchId', 'name');
+        const populated = await request.populate([
+            { path: 'employeeId', select: 'name phone email profileImage' },
+            { path: 'branchId', select: 'name' }
+        ]);
 
         res.status(201).json({
             success: true,
@@ -228,10 +229,11 @@ const approveAdvanceSalary = async (req, res) => {
         request.reviewedAt = new Date();
         await request.save();
 
-        const updated = await request
-            .populate('employeeId', 'name phone email profileImage')
-            .populate('branchId', 'name')
-            .populate('reviewedBy', 'name');
+        const updated = await request.populate([
+            { path: 'employeeId', select: 'name phone email profileImage' },
+            { path: 'branchId', select: 'name' },
+            { path: 'reviewedBy', select: 'name' }
+        ]);
 
         res.status(200).json({
             success: true,
@@ -284,10 +286,11 @@ const rejectAdvanceSalary = async (req, res) => {
         request.reviewedAt = new Date();
         await request.save();
 
-        const updated = await request
-            .populate('employeeId', 'name phone email profileImage')
-            .populate('branchId', 'name')
-            .populate('reviewedBy', 'name');
+        const updated = await request.populate([
+            { path: 'employeeId', select: 'name phone email profileImage' },
+            { path: 'branchId', select: 'name' },
+            { path: 'reviewedBy', select: 'name' }
+        ]);
 
         res.status(200).json({
             success: true,
@@ -338,10 +341,11 @@ const markAdvanceSalaryRepaid = async (req, res) => {
         request.repaidAt = new Date();
         await request.save();
 
-        const updated = await request
-            .populate('employeeId', 'name phone email profileImage')
-            .populate('branchId', 'name')
-            .populate('reviewedBy', 'name');
+        const updated = await request.populate([
+            { path: 'employeeId', select: 'name phone email profileImage' },
+            { path: 'branchId', select: 'name' },
+            { path: 'reviewedBy', select: 'name' }
+        ]);
 
         res.status(200).json({
             success: true,
