@@ -40,6 +40,7 @@ app.use("/api/departments", require("./routes/department_routes"));
 app.use("/api/branches", require("./routes/branch_routes"));
 app.use("/api/attendance", require("./routes/attendance_routes"));
 app.use("/api/salary", require("./routes/salary_routes"));
+app.use("/api/advance-salary", require("./routes/advanceSalary"));
 app.use("/api/tickets", require("./routes/ticket_routes"));
 app.use("/api/shifts", require("./routes/shift_routes"));
 app.use("/api/tracking", require("./routes/tracking_routes"));
