@@ -220,10 +220,13 @@ exports.punchOut = async (req, res) => {
 
         // --- Geofencing check for Punch-Out ---
         const user = await User.findById(employeeId).populate('branchId branchIds');
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        if (rules.requireLocation && attendance.remarks !== 'Work From Home') {
+        if (rules.requireLocation && !attendance.isWFH) {
             const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
             if (branches.length === 0) {
                 return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
@@ -318,7 +321,7 @@ exports.punchOut = async (req, res) => {
 
         res.json({
             message: 'Punch-out Successful',
-            workHours: netWorkHours.toFixed(2),
+            workHours: Number.isFinite(netWorkHours) ? netWorkHours.toFixed(2) : '0.00',
             attendance
         });
 
