@@ -116,6 +116,11 @@ const UserSchema = new mongoose.Schema({
         default: 'active'
     },
     isActive: { type: Boolean, default: true }, // For Admin tenant status
+    // Admin-controlled live-location tracking. When true, this employee's
+    // position is reported during an active shift. Defaults to false — the
+    // admin opts each employee in from the Tracking page (employees are NOT
+    // tracked unless explicitly enabled).
+    trackingEnabled: { type: Boolean, default: false },
     permissions: { type: mongoose.Schema.Types.Mixed, default: null },
     otp: { type: String },
     otpExpiry: { type: Date },

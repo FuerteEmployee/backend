@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const AdvanceSalaryRequest = require('../models/AdvanceSalaryRequest');
 const User = require('../models/User');
 
@@ -143,15 +144,21 @@ const getAdvanceSalarySummary = async (req, res) => {
         const userRole = req.user.role;
         const companyId = req.adminId;
 
-        const matchStage = { companyId };
+        // NOTE: aggregation $match does NOT auto-cast strings to ObjectId the way
+        // Mongoose .find() does. companyId / employeeId / branchId are stored as
+        // ObjectId, so we must cast the (string) request values or every $match
+        // silently returns nothing — which showed up as all-zero summary cards.
+        const matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
 
         // Role-based filter
         if (userRole === 'employee') {
-            matchStage.employeeId = req.user.userId;
-        } else if ((userRole === 'admin' || userRole === 'subadmin') && branchId) {
-            matchStage.branchId = branchId;
-        } else if (userRole === 'superadmin' && branchId) {
-            matchStage.branchId = branchId;
+            matchStage.employeeId = new mongoose.Types.ObjectId(req.user.userId);
+        } else if (
+            (userRole === 'admin' || userRole === 'subadmin' || userRole === 'superadmin') &&
+            branchId &&
+            mongoose.Types.ObjectId.isValid(branchId)
+        ) {
+            matchStage.branchId = new mongoose.Types.ObjectId(branchId);
         }
 
         // Promise.all with 4 separate aggregations
@@ -224,7 +231,22 @@ const approveAdvanceSalary = async (req, res) => {
             });
         }
 
+        // Optional partial approval — admin may approve less than requested.
+        // Defaults to the full requested amount when not supplied.
+        let approvedAmount = request.amount;
+        const rawApproved = req.body?.approvedAmount;
+        if (rawApproved !== undefined && rawApproved !== null && rawApproved !== '') {
+            approvedAmount = Number(rawApproved);
+            if (!Number.isFinite(approvedAmount) || approvedAmount < 1) {
+                return res.status(400).json({ success: false, message: 'Approved amount must be a positive number' });
+            }
+            if (approvedAmount > request.amount) {
+                return res.status(400).json({ success: false, message: 'Approved amount cannot exceed the requested amount' });
+            }
+        }
+
         request.status = 'approved';
+        request.approvedAmount = approvedAmount;
         request.reviewedBy = userId;
         request.reviewedAt = new Date();
         await request.save();

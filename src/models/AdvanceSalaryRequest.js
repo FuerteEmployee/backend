@@ -44,6 +44,12 @@ const AdvanceSalaryRequestSchema = new mongoose.Schema({
         default: 'pending',
         index: true
     },
+    // Amount the admin actually approved. May be less than the requested `amount`
+    // (partial approval). Set when the request is approved.
+    approvedAmount: {
+        type: Number,
+        min: 0
+    },
     reviewedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

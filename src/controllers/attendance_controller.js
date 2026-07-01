@@ -318,7 +318,7 @@ exports.punchOut = async (req, res) => {
 
         res.json({
             message: 'Punch-out Successful',
-            workHours: workHours.toFixed(2),
+            workHours: netWorkHours.toFixed(2),
             attendance
         });
 
