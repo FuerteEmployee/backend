@@ -98,12 +98,14 @@ exports.getProfile = async (req, res) => {
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
 
         const [todayAttendance, recentAttendance, upcomingHolidays, settings] = await Promise.all([
             Attendance.findOne({
                 employeeId: user._id,
-                date: { $gte: today }
-            }),
+                date: { $gte: today, $lt: tomorrow }
+            }).sort({ date: -1 }),
             Attendance.find({ employeeId: user._id })
                 .sort({ date: -1 })
                 .limit(5),

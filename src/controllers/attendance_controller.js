@@ -7,7 +7,7 @@ const Festival = require('../models/Festival');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
-const { isWeeklyOff } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -64,8 +64,7 @@ exports.punchIn = async (req, res) => {
         const employeeId = req.userId; // Use userId from protect middleware
         const { location, photo, isWFH, address } = req.body;
         const now = new Date();
-        const todayStr = now.toISOString().split('T')[0];
-        const today = new Date(todayStr);
+        const today = new Date(); today.setHours(0, 0, 0, 0);
 
         // 1. Check if already punched in
         let attendance = await Attendance.findOne({
@@ -201,8 +200,7 @@ exports.punchOut = async (req, res) => {
         const employeeId = req.userId;
         const { location, photo, address } = req.body;
         const now = new Date();
-        const todayStr = now.toISOString().split('T')[0];
-        const today = new Date(todayStr);
+        const today = new Date(); today.setHours(0, 0, 0, 0);
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -515,7 +513,7 @@ exports.getEmployeeHistory = async (req, res) => {
 
         const attendanceMap = new Map();
         history.forEach(rec => {
-            attendanceMap.set(rec.date.toISOString().split('T')[0], rec);
+            attendanceMap.set(toLocalDateKey(rec.date), rec);
         });
 
         const festivalMap = new Map();
