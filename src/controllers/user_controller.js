@@ -34,6 +34,10 @@ exports.loginRequest = async (req, res) => {
             return res.status(404).json({ message: 'You are not registered. Please contact your admin to register you first.' });
         }
 
+        if (user.status === 'inactive') {
+            return res.status(403).json({ code: 'account_inactive', message: 'Your account is inactive. Please contact your admin.', name: user.name });
+        }
+
         // Update existing user with OTP
         user.otp = otp;
         user.otpExpiry = otpExpiry;
@@ -52,6 +56,11 @@ exports.verifyOtp = async (req, res) => {
         if (!user || user.otp !== otp || user.otpExpiry < new Date()) {
             return res.status(400).json({ message: 'Invalid or expired OTP' });
         }
+
+        if (user.status === 'inactive') {
+            return res.status(403).json({ code: 'account_inactive', message: 'Your account is inactive. Please contact your admin.', name: user.name });
+        }
+
         user.otp = undefined;
         user.otpExpiry = undefined;
         const token = generateToken(user);
