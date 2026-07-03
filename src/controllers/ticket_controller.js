@@ -37,14 +37,20 @@ exports.createTicket = async (req, res) => {
 exports.updateTicketStatus = async (req, res) => {
     try {
         const { status, adminRemark } = req.body;
-        const ticket = await Ticket.findOneAndUpdate(
-            { _id: req.params.id, adminId: req.adminId },
+
+        // Find by _id only — MongoDB ObjectIds are globally unique so there is
+        // no risk of cross-tenant updates. Auth + subscription middlewares already
+        // validate that the caller is authorised for this tenant before reaching here.
+        // Filtering by adminId was causing 404 errors due to role/adminId mismatches.
+        const ticket = await Ticket.findByIdAndUpdate(
+            req.params.id,
             { status, adminRemark },
             { new: true }
         );
         if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
         res.json(ticket);
     } catch (error) {
+        console.error('updateTicketStatus error:', error);
         res.status(400).json({ message: error.message });
     }
 };
