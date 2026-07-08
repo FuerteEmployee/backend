@@ -11,7 +11,7 @@ const User = require('../models/User');
  */
 const getAdvanceSalaryRequests = async (req, res) => {
     try {
-        const { branchId, type, status, search } = req.query;
+        const { branchId, type, status, search, employeeId } = req.query;
         const userId = req.user.userId;
         const userRole = req.user.role;
         const companyId = req.adminId;
@@ -30,6 +30,12 @@ const getAdvanceSalaryRequests = async (req, res) => {
             if (branchId) query.branchId = branchId;
         } else if (userRole === 'admin') {
             // Regular admin sees all branches
+        }
+
+        // Explicit single-employee filter (e.g. the payroll advance-deduction
+        // picker) — admins/subadmins only, employees are already self-scoped above.
+        if (employeeId && userRole !== 'employee') {
+            query.employeeId = employeeId;
         }
 
         // Type filter

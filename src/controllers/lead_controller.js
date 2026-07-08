@@ -15,8 +15,28 @@ exports.getLeads = async (req, res) => {
 
 exports.addLead = async (req, res) => {
     try {
+        const imageUrls = req.files ? req.files.map(f => f.path) : [];
+
+        if (req.user.role === 'employee') {
+            const { name, email, phone, company, address, businessType, requirement } = req.body;
+            const lead = await Lead.create({
+                name,
+                email,
+                phone,
+                company,
+                address,
+                businessType,
+                requirement,
+                imageUrls,
+                source: req.currentUser.name,
+                adminId: req.adminId
+            });
+            return res.status(201).json(lead);
+        }
+
         const lead = await Lead.create({
             ...req.body,
+            imageUrls,
             adminId: req.adminId
         });
         res.status(201).json(lead);
@@ -27,6 +47,10 @@ exports.addLead = async (req, res) => {
 
 exports.updateLead = async (req, res) => {
     try {
+        if (req.user.role === 'employee') {
+            return res.status(403).json({ message: 'Employees cannot edit leads' });
+        }
+
         const lead = await Lead.findOneAndUpdate(
             { _id: req.params.id, adminId: req.adminId },
             req.body,
@@ -41,6 +65,10 @@ exports.updateLead = async (req, res) => {
 
 exports.deleteLead = async (req, res) => {
     try {
+        if (req.user.role === 'employee') {
+            return res.status(403).json({ message: 'Employees cannot delete leads' });
+        }
+
         const lead = await Lead.findOneAndDelete({ _id: req.params.id, adminId: req.adminId });
         if (!lead) return res.status(404).json({ message: 'Lead not found' });
         res.json({ message: 'Lead deleted' });

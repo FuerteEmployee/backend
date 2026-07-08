@@ -30,7 +30,8 @@ const UserSchema = new mongoose.Schema({
     branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }, // primary branch (kept for backward compatibility)
     branchIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }], // all branches when multi-branch is enabled
     salary: { type: Number, default: 0 },
-    shiftId: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift' },
+    shiftId: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift' }, // primary shift (used for attendance/lateness calculations)
+    shiftIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Shift' }], // all shifts assigned, when multi-shift is enabled
     profileImage: { type: String },
 
     // Attendance Exceptions
@@ -65,6 +66,9 @@ const UserSchema = new mongoose.Schema({
         branchName: { type: String },
         nameAsPerBank: { type: String }
     },
+
+    panCardUrls: [{ type: String }],      // uploaded PAN card scan(s), front/back
+    aadhaarCardUrls: [{ type: String }],  // uploaded Aadhaar card scan(s), front/back
 
     // Customized Holiday Fields
     weeklyHolidays: [{
@@ -115,6 +119,8 @@ const UserSchema = new mongoose.Schema({
         enum: ['active', 'inactive'],
         default: 'active'
     },
+    // Optional admin-supplied reason shown to the user at login when status is 'inactive'.
+    inactiveReason: { type: String, default: '' },
     isActive: { type: Boolean, default: true }, // For Admin tenant status
     // Admin-controlled live-location tracking. When true, this employee's
     // position is reported during an active shift. Defaults to false — the

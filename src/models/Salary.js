@@ -40,6 +40,15 @@ const SalarySchema = new mongoose.Schema({
     netSalary: { type: Number },
     dailyRateBasis: { type: String },   // snapshot of the basis used
     needsReview: { type: Boolean, default: false }, // invariant failed — do not pay blindly
+
+    // Approved advance-salary/loan requests recovered via this month's payroll.
+    // Re-applied on every recompute so a later bulk regenerate can't silently
+    // drop an already-included recovery.
+    deductedAdvanceRequestIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AdvanceSalaryRequest' }],
+
+    // Approved expense claims reimbursed via this month's payroll. Re-applied on
+    // every recompute for the same reason as deductedAdvanceRequestIds above.
+    reimbursedExpenseIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Expense' }],
 }, { timestamps: true });
 
 SalarySchema.index({ adminId: 1, employeeId: 1, year: 1, month: 1 });

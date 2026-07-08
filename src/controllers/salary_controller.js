@@ -1,4 +1,6 @@
 const Salary = require('../models/Salary');
+const AdvanceSalaryRequest = require('../models/AdvanceSalaryRequest');
+const Expense = require('../models/Expense');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Festival = require('../models/Festival');
@@ -15,7 +17,7 @@ const { runEngine, applyRounding, validateSalary } = require('../utils/payroll_e
 // When settings.payroll.enabled === true the deterministic engine runs and
 // returns an enriched payload (buckets, payableDays, needsReview, etc.).
 // When false the legacy calculation path runs verbatim — no surprise changes.
-exports.computeSalary = async (adminId, emp, month, year) => {
+exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount = 0, reimbursementAmount = 0) => {
     const totalDaysInMonth = new Date(year, month, 0).getDate();
 
     const now = new Date();
@@ -99,6 +101,16 @@ exports.computeSalary = async (adminId, emp, month, year) => {
         addComp('retention', 'Retention', 'deduction');
         addComp('adminCharge', 'Admin Charges', 'deduction');
         if (remainingBase !== 0) earnings.push({ name: 'Remaining Balance (Special)', amount: remainingBase, included: true });
+
+        if (advanceDeductionAmount > 0) {
+            deductions.push({ name: 'Advance Salary Recovery', amount: advanceDeductionAmount, included: true });
+            totalDeductions += advanceDeductionAmount;
+        }
+
+        if (reimbursementAmount > 0) {
+            earnings.push({ name: 'Expense Reimbursement', amount: reimbursementAmount, included: true });
+            addedOnTop += reimbursementAmount;
+        }
 
         const grossSalary = earnedBase + addedOnTop;
         // Round NET exactly once (SOP §6 — rounding applied once at the end)
@@ -260,6 +272,16 @@ exports.computeSalary = async (adminId, emp, month, year) => {
         earnings.push({ name: 'Remaining Balance (Special)', amount: remainingBase, included: true });
     }
 
+    if (advanceDeductionAmount > 0) {
+        deductions.push({ name: 'Advance Salary Recovery', amount: advanceDeductionAmount, included: true });
+        totalDeductions += advanceDeductionAmount;
+    }
+
+    if (reimbursementAmount > 0) {
+        earnings.push({ name: 'Expense Reimbursement', amount: reimbursementAmount, included: true });
+        addedOnTop += reimbursementAmount;
+    }
+
     const grossSalary = earnedBase + addedOnTop;
     const netSalary = grossSalary - totalDeductions;
 
@@ -276,8 +298,49 @@ exports.computeSalary = async (adminId, emp, month, year) => {
 };
 
 // Compute + persist a Salary record (payroll generation).
-exports.calculateAndSaveSalary = async (adminId, emp, month, year) => {
-    const r = await exports.computeSalary(adminId, emp, month, year);
+//
+// advanceRequestIds: approved advance-salary/loan request ids to recover as a
+// deduction in this run (from the targeted per-employee "apply advance
+// deduction" flow). Any advances already linked to this employee's record for
+// this month/year (from an earlier run) are automatically re-applied too, so a
+// later bulk regenerate can't silently drop an already-included recovery.
+exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceRequestIds = [], expenseIds = []) => {
+    const existing = await Salary.findOne({ adminId, employeeId: emp._id, month, year })
+        .select('deductedAdvanceRequestIds reimbursedExpenseIds')
+        .lean();
+    const existingIds = (existing?.deductedAdvanceRequestIds || []).map(String);
+    const allAdvanceIds = Array.from(new Set([...existingIds, ...advanceRequestIds.map(String)]));
+
+    let advances = [];
+    if (allAdvanceIds.length) {
+        // 'repaid' is included so an advance already recovered by an earlier run
+        // of this same month keeps being reflected on every recompute.
+        advances = await AdvanceSalaryRequest.find({
+            _id: { $in: allAdvanceIds },
+            employeeId: emp._id,
+            companyId: adminId,
+            status: { $in: ['approved', 'repaid'] },
+        });
+    }
+    const advanceDeductionAmount = advances.reduce((sum, a) => sum + (a.approvedAmount ?? a.amount), 0);
+
+    const existingExpenseIds = (existing?.reimbursedExpenseIds || []).map(String);
+    const allExpenseIds = Array.from(new Set([...existingExpenseIds, ...expenseIds.map(String)]));
+
+    let expenses = [];
+    if (allExpenseIds.length) {
+        // 'reimbursed' is included so an expense already reimbursed by an earlier
+        // run of this same month keeps being reflected on every recompute.
+        expenses = await Expense.find({
+            _id: { $in: allExpenseIds },
+            employeeId: emp._id,
+            adminId,
+            status: { $in: ['approved', 'reimbursed'] },
+        });
+    }
+    const reimbursementAmount = expenses.reduce((sum, e) => sum + e.amount, 0);
+
+    const r = await exports.computeSalary(adminId, emp, month, year, advanceDeductionAmount, reimbursementAmount);
 
     const now = new Date();
     const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
@@ -290,6 +353,9 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year) => {
         totalSalary: r.totalSalary,
         employmentType: r.employmentType,
         breakdown: r.breakdown,
+        deductions: (r.breakdown.deductions || []).reduce((s, d) => s + (d.amount || 0), 0),
+        deductedAdvanceRequestIds: advances.map(a => a._id),
+        reimbursedExpenseIds: expenses.map(e => e._id),
         remarks,
         status,
         grossSalary: r.grossSalary,
@@ -319,11 +385,58 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year) => {
         });
     }
 
-    return await Salary.findOneAndUpdate(
+    const saved = await Salary.findOneAndUpdate(
         { adminId, employeeId: emp._id, month, year },
         update,
         { upsert: true, new: true }
     );
+
+    // Only newly-included advances need the status flip — ones already 'repaid'
+    // from a prior run of this same month are left untouched.
+    const newlyDeducted = advances.filter(a => a.status === 'approved');
+    if (newlyDeducted.length) {
+        await AdvanceSalaryRequest.updateMany(
+            { _id: { $in: newlyDeducted.map(a => a._id) } },
+            { status: 'repaid', repaidAt: now, deductedInMonth: new Date(year, month - 1, 1) }
+        );
+    }
+
+    // Only newly-included expenses need the status flip — ones already
+    // 'reimbursed' from a prior run of this same month are left untouched.
+    const newlyReimbursed = expenses.filter(e => e.status === 'approved');
+    if (newlyReimbursed.length) {
+        await Expense.updateMany(
+            { _id: { $in: newlyReimbursed.map(e => e._id) } },
+            { status: 'reimbursed', reimbursedInMonth: new Date(year, month - 1, 1) }
+        );
+    }
+
+    return saved;
+};
+
+// Recompute + save salary for a single employee, optionally recovering one or
+// more of their approved advance-salary/loan requests in this run. Used by the
+// payroll UI's per-employee "apply advance deduction" action.
+exports.generateSalaryForEmployee = async (req, res) => {
+    try {
+        const { employeeId, month, year, advanceRequestIds, expenseIds } = req.body;
+        if (!employeeId || !month || !year) {
+            return res.status(400).json({ message: 'employeeId, month and year are required' });
+        }
+
+        const adminId = req.adminId;
+        const emp = await User.findOne({ _id: employeeId, adminId, role: 'employee' });
+        if (!emp) return res.status(404).json({ message: 'Employee not found' });
+
+        const salaryRecord = await exports.calculateAndSaveSalary(
+            adminId, emp, Number(month), Number(year),
+            Array.isArray(advanceRequestIds) ? advanceRequestIds : [],
+            Array.isArray(expenseIds) ? expenseIds : []
+        );
+        res.status(200).json(salaryRecord);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 };
 
 exports.generateSalaries = async (req, res) => {

@@ -7,6 +7,7 @@ const {
     getMySubscription,
     getUsers,
     getEmployees,
+    getCoworkers,
     createUser,
     updateUser,
     updateProfile,
@@ -18,14 +19,18 @@ const {
 } = require('../controllers/user_controller');
 const { protect, adminOnly, checkPermission } = require('../middleware/auth.middleware');
 const { checkSubscription } = require('../middleware/subscription.middleware');
-const { upload } = require('../config/cloudinary');
+const { upload, uploadIdDocument } = require('../config/cloudinary');
 
 // --- Auth Routes ---
 router.post('/login-request', loginRequest); // Request OTP for login via phone
 router.post('/verify-otp', verifyOtp); // Verify OTP and receive JWT token
 router.get('/profile', protect, getProfile); // Get currently logged-in user details
 router.get('/subscription', protect, getMySubscription); // Get current tenant subscription/trial status (not subscription-gated)
-router.put('/profile', protect, upload.single('logo'), updateProfile); // Update logged-in user profile with image
+router.put('/profile', protect, uploadIdDocument.fields([
+    { name: 'logo', maxCount: 1 },
+    { name: 'panCard', maxCount: 2 },
+    { name: 'aadhaarCard', maxCount: 2 },
+]), updateProfile); // Update logged-in user profile, incl. PAN/Aadhaar scans
 
 // --- User Management (Protected) ---
 // Auth + profile + subscription routes above stay open even when expired so the
@@ -35,6 +40,7 @@ router.use(protect);
 router.use(checkSubscription);
 router.get('/', getUsers); // List all users under the admin
 router.get('/employees', getEmployees); // Fetch only employee role users
+router.get('/coworkers', getCoworkers); // Minimal id+name colleague list (e.g. for bill-split pickers)
 router.post('/employees', checkPermission('employees', 'create'), createUser); // Create a new employee record
 router.put('/employees/:id', checkPermission('employees', 'edit'), updateUser); // Update specific employee details by ID
 router.delete('/employees/:id', checkPermission('employees', 'delete'), deleteUser); // Delete a specific employee record

@@ -18,4 +18,26 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({ storage: storage });
 
-module.exports = { cloudinary, upload };
+const documentStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'bot-uploads/expense-documents',
+    resource_type: 'raw',
+    allowed_formats: ['pdf', 'doc', 'docx'],
+  },
+});
+
+const uploadDocument = multer({ storage: documentStorage });
+
+const idDocumentStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'bot-uploads/id-documents',
+    resource_type: 'auto',
+    allowed_formats: ['jpg', 'png', 'jpeg', 'webp', 'pdf'],
+  },
+});
+
+const uploadIdDocument = multer({ storage: idDocumentStorage });
+
+module.exports = { cloudinary, upload, uploadDocument, uploadIdDocument };

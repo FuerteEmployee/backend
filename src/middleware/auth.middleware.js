@@ -26,8 +26,15 @@ const protect = async (req, res, next) => {
             req.user = decoded;
 
             const user = await User.findById(req.userId);
-            if (!user || user.status === 'inactive') {
-                return res.status(401).json({ message: 'Not authorized, user inactive or not found' });
+            if (!user) {
+                return res.status(401).json({ message: 'Not authorized, user not found' });
+            }
+            if (user.status === 'inactive') {
+                return res.status(401).json({
+                    code: 'account_inactive',
+                    message: user.inactiveReason?.trim() || 'Your account is inactive. Please contact your admin.',
+                    name: user.name
+                });
             }
 
             // Make the full user record (incl. permissions) available downstream

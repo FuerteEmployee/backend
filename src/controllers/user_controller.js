@@ -35,7 +35,11 @@ exports.loginRequest = async (req, res) => {
         }
 
         if (user.status === 'inactive') {
-            return res.status(403).json({ code: 'account_inactive', message: 'Your account is inactive. Please contact your admin.', name: user.name });
+            return res.status(403).json({
+                code: 'account_inactive',
+                message: user.inactiveReason?.trim() || 'Your account is inactive. Please contact your admin.',
+                name: user.name
+            });
         }
 
         // Update existing user with OTP
@@ -58,7 +62,11 @@ exports.verifyOtp = async (req, res) => {
         }
 
         if (user.status === 'inactive') {
-            return res.status(403).json({ code: 'account_inactive', message: 'Your account is inactive. Please contact your admin.', name: user.name });
+            return res.status(403).json({
+                code: 'account_inactive',
+                message: user.inactiveReason?.trim() || 'Your account is inactive. Please contact your admin.',
+                name: user.name
+            });
         }
 
         user.otp = undefined;
@@ -102,7 +110,7 @@ exports.verifyOtp = async (req, res) => {
 
 exports.getProfile = async (req, res) => {
     try {
-        const user = await User.findById(req.userId).populate('shiftId branchId branchIds departmentId');
+        const user = await User.findById(req.userId).populate('shiftId shiftIds branchId branchIds departmentId');
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         const today = new Date();
@@ -196,9 +204,26 @@ exports.getMySubscription = async (req, res) => {
 
 exports.updateProfile = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        if (req.file) {
-            updateData.companyLogo = req.file.path;
+        const allowedFields = ['name', 'phone', 'email', 'address', 'bloodGroup', 'contactPersonName', 'contactPersonMobile', 'aadhaarNo', 'panNo', 'bankDetails'];
+        const updateData = {};
+        for (const key of allowedFields) {
+            if (req.body[key] !== undefined) updateData[key] = req.body[key];
+        }
+        // bankDetails arrives as a JSON string when the request is multipart (file uploads present)
+        if (typeof updateData.bankDetails === 'string') {
+            try { updateData.bankDetails = JSON.parse(updateData.bankDetails); } catch { delete updateData.bankDetails; }
+        }
+
+        if (req.files?.logo?.[0]) updateData.profileImage = req.files.logo[0].path;
+        if (req.files?.panCard?.length) updateData.panCardUrls = req.files.panCard.map(f => f.path);
+        if (req.files?.aadhaarCard?.length) updateData.aadhaarCardUrls = req.files.aadhaarCard.map(f => f.path);
+
+        // Explicit duplicate-phone guard when the employee is changing their own login number
+        if (updateData.phone) {
+            const existing = await User.findOne({ phone: updateData.phone, _id: { $ne: req.userId } });
+            if (existing) {
+                return res.status(409).json({ message: `This phone number (${updateData.phone}) is already registered. Please use a different phone number.` });
+            }
         }
 
         const user = await User.findByIdAndUpdate(
@@ -209,7 +234,8 @@ exports.updateProfile = async (req, res) => {
         if (!user) return res.status(404).json({ message: 'User not found' });
         res.json(user);
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        const { status, message } = friendlyMongooseError(error);
+        res.status(status).json({ message });
     }
 };
 
@@ -224,7 +250,7 @@ exports.getUsers = async (req, res) => {
         if (search) query.name = { $regex: search, $options: 'i' };
 
         const users = await User.find(query)
-            .populate('departmentId branchId branchIds shiftId')
+            .populate('departmentId branchId branchIds shiftId shiftIds')
             .limit(limit * 1)
             .skip((page - 1) * limit)
             .sort({ createdAt: -1 });
@@ -244,9 +270,23 @@ exports.getUsers = async (req, res) => {
 exports.getEmployees = async (req, res) => {
     try {
         const employees = await User.find({ adminId: new mongoose.Types.ObjectId(req.adminId), role: 'employee' })
-            .populate('departmentId branchId branchIds shiftId')
+            .populate('departmentId branchId branchIds shiftId shiftIds')
             .sort({ createdAt: -1 });
         res.json(employees);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Minimal id+name listing of colleagues, safe to expose to any employee (e.g. for bill-split pickers)
+exports.getCoworkers = async (req, res) => {
+    try {
+        const coworkers = await User.find({
+            adminId: new mongoose.Types.ObjectId(req.adminId),
+            role: 'employee',
+            _id: { $ne: req.userId }
+        }).select('_id name');
+        res.json(coworkers);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -268,6 +308,25 @@ exports.createUser = async (req, res) => {
             userData.branchIds = userData.branchIds.filter(Boolean);
             if (userData.branchIds.length > 0) {
                 userData.branchId = userData.branchIds[0];
+            }
+        }
+
+        // Multi-shift support: keep primary shiftId (used for attendance/lateness
+        // calculations) in sync with shiftIds — mirrors branchId/branchIds above.
+        if (Array.isArray(userData.shiftIds)) {
+            userData.shiftIds = userData.shiftIds.filter(Boolean);
+            if (userData.shiftIds.length > 0) {
+                userData.shiftId = userData.shiftIds[0];
+            }
+        }
+
+        // Explicit duplicate-phone guard — don't rely solely on the DB unique
+        // index, since a phone can be shared across different adminId tenants
+        // and stale/broken indexes on this collection have slipped through before.
+        if (userData.phone) {
+            const existing = await User.findOne({ phone: userData.phone });
+            if (existing) {
+                return res.status(409).json({ message: `This phone number (${userData.phone}) is already registered. Please use a different phone number.` });
             }
         }
 
@@ -321,6 +380,26 @@ exports.updateUser = async (req, res) => {
         if (Array.isArray(updateData.branchIds)) {
             updateData.branchIds = updateData.branchIds.filter(Boolean);
             updateData.branchId = updateData.branchIds.length > 0 ? updateData.branchIds[0] : null;
+        }
+
+        // Multi-shift support: keep primary shiftId (used for attendance/lateness
+        // calculations) in sync with shiftIds — mirrors branchId/branchIds above.
+        if (Array.isArray(updateData.shiftIds)) {
+            updateData.shiftIds = updateData.shiftIds.filter(Boolean);
+            updateData.shiftId = updateData.shiftIds.length > 0 ? updateData.shiftIds[0] : null;
+        }
+
+        // Clear any stale deactivation reason once the account is reactivated
+        if (updateData.status === 'active') {
+            updateData.inactiveReason = '';
+        }
+
+        // Explicit duplicate-phone guard when the phone is being changed
+        if (updateData.phone) {
+            const existing = await User.findOne({ phone: updateData.phone, _id: { $ne: req.params.id } });
+            if (existing) {
+                return res.status(409).json({ message: `This phone number (${updateData.phone}) is already registered. Please use a different phone number.` });
+            }
         }
 
         const user = await User.findOneAndUpdate(

@@ -112,6 +112,15 @@ const SettingsSchema = new mongoose.Schema({
             unpaidLeave: { type: Number, default: 0, min: 0, max: 1 },
         },
     },
+    leadFields: [{
+        key: { type: String, required: true },
+        label: { type: String, required: true },
+        type: { type: String, enum: ['text', 'number', 'email', 'phone', 'select', 'date'], default: 'text' },
+        options: [{ type: String }],
+        required: { type: Boolean, default: false },
+        showInTable: { type: Boolean, default: true },
+        isSystem: { type: Boolean, default: false }
+    }]
 }, { timestamps: true });
 
 module.exports = mongoose.model('Settings', SettingsSchema);
