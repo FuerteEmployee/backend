@@ -220,7 +220,8 @@ exports.updateProfile = async (req, res) => {
 
         // Explicit duplicate-phone guard when the employee is changing their own login number
         if (updateData.phone) {
-            const existing = await User.findOne({ phone: updateData.phone, _id: { $ne: req.userId } });
+            const queryId = mongoose.Types.ObjectId.isValid(req.userId) ? new mongoose.Types.ObjectId(req.userId) : req.userId;
+            const existing = await User.findOne({ phone: updateData.phone, _id: { $ne: queryId } });
             if (existing) {
                 return res.status(409).json({ message: `This phone number (${updateData.phone}) is already registered. Please use a different phone number.` });
             }
@@ -281,10 +282,11 @@ exports.getEmployees = async (req, res) => {
 // Minimal id+name listing of colleagues, safe to expose to any employee (e.g. for bill-split pickers)
 exports.getCoworkers = async (req, res) => {
     try {
+        const queryId = mongoose.Types.ObjectId.isValid(req.userId) ? new mongoose.Types.ObjectId(req.userId) : req.userId;
         const coworkers = await User.find({
             adminId: new mongoose.Types.ObjectId(req.adminId),
             role: 'employee',
-            _id: { $ne: req.userId }
+            _id: { $ne: queryId }
         }).select('_id name');
         res.json(coworkers);
     } catch (error) {
@@ -367,6 +369,7 @@ exports.createUser = async (req, res) => {
 
 exports.updateUser = async (req, res) => {
     try {
+        console.log('[updateUser] Received body:', req.body);
         const updateData = { ...req.body };
         
         // Clean up empty strings for ObjectId fields
@@ -389,6 +392,8 @@ exports.updateUser = async (req, res) => {
             updateData.shiftId = updateData.shiftIds.length > 0 ? updateData.shiftIds[0] : null;
         }
 
+        console.log('[updateUser] Prepared updateData:', updateData);
+
         // Clear any stale deactivation reason once the account is reactivated
         if (updateData.status === 'active') {
             updateData.inactiveReason = '';
@@ -396,7 +401,8 @@ exports.updateUser = async (req, res) => {
 
         // Explicit duplicate-phone guard when the phone is being changed
         if (updateData.phone) {
-            const existing = await User.findOne({ phone: updateData.phone, _id: { $ne: req.params.id } });
+            const queryId = mongoose.Types.ObjectId.isValid(req.params.id) ? new mongoose.Types.ObjectId(req.params.id) : req.params.id;
+            const existing = await User.findOne({ phone: updateData.phone, _id: { $ne: queryId } });
             if (existing) {
                 return res.status(409).json({ message: `This phone number (${updateData.phone}) is already registered. Please use a different phone number.` });
             }
@@ -407,6 +413,12 @@ exports.updateUser = async (req, res) => {
             updateData,
             { new: true, runValidators: true }
         );
+        console.log('[updateUser] Updated user doc in DB:', {
+            _id: user?._id,
+            name: user?.name,
+            shiftId: user?.shiftId,
+            shiftIds: user?.shiftIds
+        });
         if (!user) return res.status(404).json({ message: 'User not found' });
         res.json(user);
     } catch (error) {
