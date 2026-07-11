@@ -52,6 +52,9 @@ const SettingsSchema = new mongoose.Schema({
         // attendance_controller but previously missing here (Mongoose strict
         // mode silently dropped it) — now declared so it persists.
         lateGrace: { type: Number, default: 15 },
+        // Minutes allowed for lunch before the Attendance Detail view flags an
+        // "overrun" — mirrors a field attendance-config.tsx already sends.
+        maxLunch: { type: Number, default: 90 },
 
         // ── Half-day rule configuration ──────────────────────────────────────
         // Admins choose which method (or combination) decides a half-day, so

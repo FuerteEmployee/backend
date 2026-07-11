@@ -18,6 +18,13 @@ const AttendanceSchema = new mongoose.Schema({
     lunchOutTime: { type: Date, default: null },
     lunchOutLocation: { type: String, default: null },
     lunchOutCoordinates: { lat: { type: Number }, lng: { type: Number } },
+    // Distance (meters) from the nearest assigned branch at the moment of each
+    // punch — previously computed live for the geofence check and discarded.
+    // Persisted so the UI can flag borderline "Geo Violation" punches.
+    punchInDistance: { type: Number, default: null },
+    punchOutDistance: { type: Number, default: null },
+    lunchInDistance: { type: Number, default: null },
+    lunchOutDistance: { type: Number, default: null },
     status: {
         type: String,
         enum: ['present', 'absent', 'half-day', 'late', 'wfh'],

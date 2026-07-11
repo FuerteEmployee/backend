@@ -4,10 +4,11 @@ const User = require('../models/User');
 const Branch = require('../models/Branch');
 const Settings = require('../models/Settings');
 const Festival = require('../models/Festival');
+const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
-const { isWeeklyOff, toLocalDateKey } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -125,34 +126,38 @@ exports.punchIn = async (req, res) => {
             return res.status(403).json({ message: 'Remote punch (Work From Home) is disabled for your account.' });
         }
 
-        // 4. Geofencing check (Skip if WFH) — pass if near ANY assigned branch
-        if (!isWFH && rules.requireLocation) {
-            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
-            if (branches.length === 0) {
-                return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-            }
+        // 4. Geofencing — compute distance to nearest branch whenever we can
+        // (persisted below regardless of enforcement), but only HARD-REJECT
+        // the punch when requireLocation is actually turned on for this user.
+        const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        let punchInDistance = null;
+        if (!isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
+            const distance = nearestBranchDistance(location.lat, location.lng, branches);
+            if (Number.isFinite(distance)) punchInDistance = Math.round(distance);
 
-            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
-
-            if (distance > 300) { // 300 meters limit (generous for GPS inaccuracy)
+            if (rules.requireLocation && distance > 300) { // 300 meters limit (generous for GPS inaccuracy)
                 return res.status(400).json({
                     message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)`,
                     distance: Math.round(distance)
                 });
             }
+        } else if (!isWFH && rules.requireLocation && branches.length === 0) {
+            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
-        // 4. Determine Status (Late Check)
+        // 4. Determine Status (Late Check & Shift-specific Half Day check)
         let status = 'present';
         if (user.shiftId && !isWFH) {
-            const [sHour, sMinute] = user.shiftId.startTime.split(':').map(Number);
-            const graceMinutes = settings?.attendance?.lateGrace || 15;
-
-            const shiftTime = new Date(now);
-            shiftTime.setHours(sHour, sMinute + graceMinutes, 0, 0);
-
-            if (now > shiftTime) {
+            if (isLatePunchIn(now, user.shiftId, settings)) {
                 status = 'late';
+            }
+            if (user.shiftId.halfDayLatePunchInMin) {
+                const [sHour, sMinute] = user.shiftId.startTime.split(':').map(Number);
+                const halfDayPunchInCutoff = new Date(now);
+                halfDayPunchInCutoff.setHours(sHour, sMinute + user.shiftId.halfDayLatePunchInMin, 0, 0);
+                if (now > halfDayPunchInCutoff) {
+                    status = 'half-day';
+                }
             }
         }
 
@@ -169,6 +174,7 @@ exports.punchIn = async (req, res) => {
             punchIn: now,
             punchInLocation: address || "Location provided by user",
             punchInCoordinates: location || null,
+            punchInDistance,
             punchInPhoto: photoUrl,
             status: finalStatus,
             isWFH: !!isWFH,
@@ -217,22 +223,24 @@ exports.punchOut = async (req, res) => {
         }
 
         // --- Geofencing check for Punch-Out ---
-        const user = await User.findById(employeeId).populate('branchId branchIds');
+        const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        if (rules.requireLocation && !attendance.isWFH) {
-            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
-            if (branches.length === 0) {
-                return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-            }
-            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
-            if (distance > 300) {
+        const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        let punchOutDistance = null;
+        if (!attendance.isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
+            const distance = nearestBranchDistance(location.lat, location.lng, branches);
+            if (Number.isFinite(distance)) punchOutDistance = Math.round(distance);
+
+            if (rules.requireLocation && distance > 300) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
+        } else if (!attendance.isWFH && rules.requireLocation && branches.length === 0) {
+            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
         const photoUrl = photo ? await uploadToCloudinary(photo) : null;
@@ -240,6 +248,7 @@ exports.punchOut = async (req, res) => {
         attendance.punchOut = now;
         attendance.punchOutLocation = address || "Location provided by user";
         attendance.punchOutCoordinates = location || null;
+        attendance.punchOutDistance = punchOutDistance;
         attendance.punchOutPhoto = photoUrl;
 
         // Update the last shift in the array
@@ -257,62 +266,26 @@ exports.punchOut = async (req, res) => {
         }
 
         // 5. Preserve punctuality signal before status is normalised.
-        // status 'late' gets overwritten below, but wasLate survives so the
-        // payroll engine (and analytics) can still read it.
-        if (attendance.status === 'late') attendance.wasLate = true;
-
-        // 6. Apply configurable half-day rules.
-        const hdr = settings?.attendance?.halfDayRules || {};
-        const hdMethod = hdr.method || 'durationBased';
-        const hdBothLogic = hdr.bothLogic || 'or';
-        const hdCutoff = hdr.cutoffTime || '09:35';
-        const hdMinHours = hdr.minHours != null ? hdr.minHours : (settings?.attendance?.halfDayHours ?? 4);
-        const hdDeductLunch = hdr.deductLunch !== false; // default true
-
-        // Net worked time (ms). Start from totalWorkMs which already tracks multi-punch shifts.
-        let netWorkMs = attendance.totalWorkMs || (attendance.punchOut - attendance.punchIn);
-        if (hdDeductLunch && attendance.lunchInTime && attendance.lunchOutTime) {
-            const lunchMs = new Date(attendance.lunchOutTime) - new Date(attendance.lunchInTime);
-            if (lunchMs > 0) netWorkMs = Math.max(0, netWorkMs - lunchMs);
-        }
-        const netWorkHours = netWorkMs / (1000 * 60 * 60);
-
-        // Time-based: punch-in strictly after cutoffTime = late arrival.
-        // Grace rule: 09:35:00 is still on time; 09:35:01 is late.
-        let isLateArrival = false;
-        if (attendance.punchIn) {
-            const [cutH, cutM] = hdCutoff.split(':').map(Number);
-            const pi = new Date(attendance.punchIn);
-            const piMins = pi.getHours() * 60 + pi.getMinutes();
-            const piSecs = pi.getSeconds();
-            const cutMins = cutH * 60 + cutM;
-            isLateArrival = piMins > cutMins || (piMins === cutMins && piSecs > 0);
+        // status 'late' or 'half-day' (if due to punch-in) gets overwritten below,
+        // but wasLate survives so the payroll engine can still read it.
+        if (attendance.status === 'late' || attendance.status === 'half-day' || (user.shiftId && isLatePunchIn(attendance.punchIn, user.shiftId, settings))) {
+            attendance.wasLate = true;
         }
 
-        // Duration-based: net hours below minimum = short day.
-        const isShortDay = netWorkHours < hdMinHours;
+        // 6. Apply configurable half-day rules (shared with regularization approval).
+        const { status: finalStatus, netWorkHours, remarksAppend } = determineHalfDayStatus({
+            punchIn: attendance.punchIn,
+            punchOut: attendance.punchOut,
+            totalWorkMs: attendance.totalWorkMs,
+            lunchInTime: attendance.lunchInTime,
+            lunchOutTime: attendance.lunchOutTime,
+            isWFH: attendance.isWFH,
+            shift: user.shiftId,
+        }, settings);
 
-        let isHalfDay = false;
-        if (hdMethod === 'timeBased') {
-            isHalfDay = isLateArrival;
-        } else if (hdMethod === 'durationBased') {
-            isHalfDay = isShortDay;
-        } else { // 'both'
-            isHalfDay = hdBothLogic === 'or' ? (isLateArrival || isShortDay) : (isLateArrival && isShortDay);
-        }
-
-        const remarkParts = [];
-        if (isLateArrival && (hdMethod !== 'durationBased')) remarkParts.push(`Late arrival (after ${hdCutoff})`);
-        if (isShortDay && (hdMethod !== 'timeBased')) remarkParts.push(`Short hours (${netWorkHours.toFixed(2)}h < ${hdMinHours}h)`);
-
-        if (isHalfDay) {
-            attendance.status = 'half-day';
-            const detail = remarkParts.length ? ` | ${remarkParts.join('; ')}` : '';
-            attendance.remarks = (attendance.remarks || '') + detail;
-        } else if (attendance.isWFH) {
-            attendance.status = 'wfh'; // keep WFH bucket, don't collapse to 'present'
-        } else {
-            attendance.status = 'present';
+        attendance.status = finalStatus;
+        if (finalStatus === 'half-day' && remarksAppend) {
+            attendance.remarks = (attendance.remarks || '') + remarksAppend;
         }
 
         await attendance.save();
@@ -358,15 +331,17 @@ exports.lunchIn = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        if (rules.requireLocation && attendance.remarks !== 'Work From Home') {
-            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
-            if (branches.length === 0) {
-                return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-            }
-            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
-            if (distance > 300) {
+        const lunchInBranches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        let lunchInDistance = null;
+        if (attendance.remarks !== 'Work From Home' && lunchInBranches.length > 0 && location?.lat != null && location?.lng != null) {
+            const distance = nearestBranchDistance(location.lat, location.lng, lunchInBranches);
+            if (Number.isFinite(distance)) lunchInDistance = Math.round(distance);
+
+            if (rules.requireLocation && distance > 300) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
+        } else if (rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchInBranches.length === 0) {
+            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
         if (attendance.lunchOutTime) {
@@ -376,6 +351,7 @@ exports.lunchIn = async (req, res) => {
         attendance.lunchInTime = new Date();
         attendance.lunchInLocation = address || "Location provided by user";
         attendance.lunchInCoordinates = location || null;
+        attendance.lunchInDistance = lunchInDistance;
         await attendance.save();
 
         res.json(attendance);
@@ -418,20 +394,23 @@ exports.lunchOut = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        if (rules.requireLocation && attendance.remarks !== 'Work From Home') {
-            const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
-            if (branches.length === 0) {
-                return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-            }
-            const distance = nearestBranchDistance(location?.lat, location?.lng, branches);
-            if (distance > 300) {
+        const lunchOutBranches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        let lunchOutDistance = null;
+        if (attendance.remarks !== 'Work From Home' && lunchOutBranches.length > 0 && location?.lat != null && location?.lng != null) {
+            const distance = nearestBranchDistance(location.lat, location.lng, lunchOutBranches);
+            if (Number.isFinite(distance)) lunchOutDistance = Math.round(distance);
+
+            if (rules.requireLocation && distance > 300) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
+        } else if (rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchOutBranches.length === 0) {
+            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
         attendance.lunchOutTime = new Date();
         attendance.lunchOutLocation = address || "Location provided by user";
         attendance.lunchOutCoordinates = location || null;
+        attendance.lunchOutDistance = lunchOutDistance;
         await attendance.save();
 
         res.json(attendance);
@@ -450,7 +429,14 @@ exports.getReports = async (req, res) => {
             query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
         }
 
-        const reports = await Attendance.find(query).populate('employeeId', 'name phone');
+        const reports = await Attendance.find(query).populate({
+            path: 'employeeId',
+            select: 'name phone shiftId branchId',
+            populate: [
+                { path: 'shiftId', select: 'name startTime endTime' },
+                { path: 'branchId', select: 'branchName city' },
+            ],
+        });
         res.json(reports);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -477,6 +463,105 @@ exports.updateAttendance = async (req, res) => {
 
         await attendance.save();
         res.json(attendance);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Admin marks an employee absent for a given day — find-or-create the
+// Attendance doc rather than requiring one to already exist (unlike
+// updateAttendance, which 404s if there's no record yet).
+exports.markAbsent = async (req, res) => {
+    try {
+        const { employeeId, date } = req.body;
+        if (!employeeId || !date) {
+            return res.status(400).json({ message: 'employeeId and date are required' });
+        }
+
+        const day = new Date(date);
+        day.setHours(0, 0, 0, 0);
+
+        let attendance = await Attendance.findOne({
+            adminId: new mongoose.Types.ObjectId(req.adminId),
+            employeeId: new mongoose.Types.ObjectId(employeeId),
+            date: day
+        });
+
+        if (!attendance) {
+            attendance = new Attendance({ adminId: req.adminId, employeeId, date: day });
+        }
+
+        attendance.status = 'absent';
+        attendance.punchIn = null;
+        attendance.punchOut = null;
+        attendance.lunchInTime = null;
+        attendance.lunchOutTime = null;
+        attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Marked absent by admin';
+
+        await attendance.save();
+        res.json(attendance);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Active employees with no Attendance record for today — the ones who never
+// punched in at all (as opposed to Missing Punch, which is punched-in-but-
+// not-out and already has a record).
+exports.getAbsentToday = async (req, res) => {
+    try {
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+
+        const [employees, todayRecords] = await Promise.all([
+            User.find({ adminId: req.adminId, role: 'employee', status: 'active' })
+                .select('name phone shiftId branchId')
+                .populate('shiftId', 'name')
+                .populate('branchId', 'branchName')
+                .lean(),
+            Attendance.find({ adminId: req.adminId, date: { $gte: todayStart, $lte: todayEnd } })
+                .select('employeeId')
+                .lean(),
+        ]);
+
+        const presentIds = new Set(todayRecords.map(a => String(a.employeeId)));
+        const absentees = employees.filter(e => !presentIds.has(String(e._id)));
+
+        res.json(absentees);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Bundled KPI numbers for the Attendance page — a single round trip instead
+// of shipping the whole day's records/employee list to the browser to count.
+exports.getStats = async (req, res) => {
+    try {
+        const day = req.query.date ? new Date(req.query.date) : new Date();
+        const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
+
+        const [activeEmployeeCount, todayRecords, pendingRegularizations] = await Promise.all([
+            User.countDocuments({ adminId: req.adminId, role: 'employee', status: 'active' }),
+            Attendance.find({ adminId: req.adminId, date: { $gte: dayStart, $lte: dayEnd } })
+                .select('status punchIn punchOut wasLate')
+                .lean(),
+            Regularization.countDocuments({ adminId: req.adminId, status: 'pending' }),
+        ]);
+
+        const presentToday = todayRecords.filter(r => ['present', 'late', 'wfh'].includes(r.status)).length;
+        const lateArrivals = todayRecords.filter(r => r.status === 'late' || r.wasLate).length;
+        const missingPunch = todayRecords.filter(r => r.punchIn && !r.punchOut).length;
+        const absentToday = Math.max(0, activeEmployeeCount - todayRecords.length);
+
+        res.json({
+            date: dayStart.toISOString().slice(0, 10),
+            presentToday,
+            lateArrivals,
+            missingPunch,
+            absentToday,
+            pendingRegularizations,
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
