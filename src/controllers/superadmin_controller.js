@@ -290,6 +290,9 @@ exports.updateTenant = async (req, res) => {
         }
 
         const oldPlanId = sub.planId?._id;
+        const now = new Date();
+        const wasActive = sub.status === 'active';
+        const periodLapsed = !sub.currentPeriodEnd || new Date(sub.currentPeriodEnd) <= now;
 
         // Update fields
         if (planId && planId !== oldPlanId?.toString()) {
@@ -323,6 +326,29 @@ exports.updateTenant = async (req, res) => {
         if (bannerThresholdDays !== undefined && bannerThresholdDays !== null && bannerThresholdDays !== '') {
             const n = Math.max(0, Math.min(365, Math.round(Number(bannerThresholdDays))));
             if (!Number.isNaN(n)) sub.bannerThresholdDays = n;
+        }
+
+        // Starting/renewing an active period: (re)activating from a non-active
+        // status, or already active but the stored period has lapsed (e.g. an
+        // old trial/period end date left over from before). Without this, the
+        // tenant-facing countdown keeps reading the stale expired date and the
+        // banner shows "00:00:00" forever, even right after the super admin
+        // sets the tenant to active on a paid plan.
+        if (sub.status === 'active' && (!wasActive || periodLapsed)) {
+            const MS_DAY = 24 * 60 * 60 * 1000;
+            const days = sub.billingCycle === 'annual' ? 365 : 30;
+            sub.currentPeriodStart = now;
+            sub.currentPeriodEnd = new Date(now.getTime() + days * MS_DAY);
+            sub.graceEndDate = undefined;
+            sub.remindersSent = [];
+            if (wasActive && periodLapsed) {
+                sub.history.push({
+                    action: 'renewed',
+                    toPlan: sub.planId,
+                    date: now,
+                    note: note || 'Renewed by super admin',
+                });
+            }
         }
 
         // Recompute MRR centrally: only an *active* subscription contributes
