@@ -16,11 +16,12 @@ const allowedOrigins = [
     "http://localhost:4173",
     "https://api.beontimeofficial.com",
 
-    // BOTLens (camera attendance app) local dev — served by its FastAPI backend
+    // BOTLens (camera attendance app) — local dev and the live deployment
     "http://localhost:8000",
     "https://localhost:8000",
     "http://localhost:10000",
     "https://localhost:10000",
+    "https://botlens.beontimeofficial.com",
 
     // Capacitor native apps (Android/iOS WebView origins)
     "https://localhost",
