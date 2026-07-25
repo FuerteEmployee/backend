@@ -16,6 +16,12 @@ const allowedOrigins = [
     "http://localhost:4173",
     "https://api.beontimeofficial.com",
 
+    // BOTLens (camera attendance app) local dev — served by its FastAPI backend
+    "http://localhost:8000",
+    "https://localhost:8000",
+    "http://localhost:10000",
+    "https://localhost:10000",
+
     // Capacitor native apps (Android/iOS WebView origins)
     "https://localhost",
     "http://localhost",
@@ -39,6 +45,7 @@ app.use("/api/users", require("./routes/user_routes"));
 app.use("/api/departments", require("./routes/department_routes"));
 app.use("/api/branches", require("./routes/branch_routes"));
 app.use("/api/attendance", require("./routes/attendance_routes"));
+app.use("/api/device/attendance", require("./routes/device_attendance_routes"));
 app.use("/api/salary", require("./routes/salary_routes"));
 app.use("/api/advance-salary", require("./routes/advanceSalary"));
 app.use("/api/tickets", require("./routes/ticket_routes"));

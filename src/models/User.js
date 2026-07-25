@@ -34,6 +34,15 @@ const UserSchema = new mongoose.Schema({
     shiftIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Shift' }], // all shifts assigned, when multi-shift is enabled
     profileImage: { type: String },
 
+    // Separate email+password pair assigned by the super admin, unrelated to
+    // phone+OTP login. BOTLens (the camera console) requires re-entering these
+    // before adding a new employee, so an unattended/borrowed admin session
+    // can't be used by anyone else to register a fraudulent face. Password is
+    // stored reversibly (encrypted, not hashed) — see utils/reversible_crypto —
+    // so the super admin can view the current value, not just overwrite it.
+    botlensEmail: { type: String, default: null },
+    botlensPasswordEnc: { type: String, default: null },
+
     // Attendance Exceptions
     attendanceExceptions: {
         overrideGlobal: { type: Boolean, default: false },

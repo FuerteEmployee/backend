@@ -3,6 +3,7 @@ const router = express.Router();
 const {
     loginRequest,
     verifyOtp,
+    verifyBotlensCredentials,
     getProfile,
     getMySubscription,
     getUsers,
@@ -26,6 +27,7 @@ router.post('/login-request', loginRequest); // Request OTP for login via phone
 router.post('/verify-otp', verifyOtp); // Verify OTP and receive JWT token
 router.get('/profile', protect, getProfile); // Get currently logged-in user details
 router.get('/subscription', protect, getMySubscription); // Get current tenant subscription/trial status (not subscription-gated)
+router.post('/verify-add-employee', protect, verifyBotlensCredentials); // Re-confirm admin identity before BOTLens adds an employee (not subscription-gated)
 router.put('/profile', protect, uploadIdDocument.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'panCard', maxCount: 2 },
