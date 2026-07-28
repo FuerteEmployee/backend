@@ -9,6 +9,7 @@ const BranchSchema = new mongoose.Schema({
     },
     branchName: { type: String, required: true },
     branchLocation: { type: String, required: true },
+    city: { type: String },
     latitude: { type: Number },
     longitude: { type: Number }
 }, { timestamps: true });

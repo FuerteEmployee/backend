@@ -5,8 +5,9 @@ const mongoose = require('mongoose');
 
 exports.getBranches = async (req, res) => {
     try {
+        const adminIdObj = new mongoose.Types.ObjectId(req.adminId);
         const branches = await Branch.aggregate([
-            { $match: { adminId: new mongoose.Types.ObjectId(req.adminId) } },
+            { $match: { adminId: adminIdObj } },
             {
                 // Count employees whose primary branch OR any of their multiple branches is this branch
                 $lookup: {
@@ -16,9 +17,15 @@ exports.getBranches = async (req, res) => {
                         {
                             $match: {
                                 $expr: {
-                                    $or: [
-                                        { $eq: ['$branchId', '$$branchId'] },
-                                        { $in: ['$$branchId', { $ifNull: ['$branchIds', []] }] }
+                                    $and: [
+                                        { $eq: ['$adminId', adminIdObj] },
+                                        { $eq: ['$role', 'employee'] },
+                                        {
+                                            $or: [
+                                                { $eq: ['$branchId', '$$branchId'] },
+                                                { $in: ['$$branchId', { $ifNull: ['$branchIds', []] }] }
+                                            ]
+                                        }
                                     ]
                                 }
                             }
@@ -32,6 +39,7 @@ exports.getBranches = async (req, res) => {
                     _id: 1,
                     branchName: 1,
                     branchLocation: 1,
+                    city: 1,
                     latitude: 1,
                     longitude: 1,
                     createdAt: 1,

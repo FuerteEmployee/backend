@@ -306,20 +306,20 @@ exports.createUser = async (req, res) => {
         });
 
         // Multi-branch support: keep primary branchId in sync with branchIds
-        if (Array.isArray(userData.branchIds)) {
+        if (Array.isArray(userData.branchIds) && userData.branchIds.filter(Boolean).length > 0) {
             userData.branchIds = userData.branchIds.filter(Boolean);
-            if (userData.branchIds.length > 0) {
-                userData.branchId = userData.branchIds[0];
-            }
+            userData.branchId = userData.branchIds[0];
+        } else if (userData.branchId) {
+            userData.branchIds = [userData.branchId];
         }
 
         // Multi-shift support: keep primary shiftId (used for attendance/lateness
         // calculations) in sync with shiftIds — mirrors branchId/branchIds above.
-        if (Array.isArray(userData.shiftIds)) {
+        if (Array.isArray(userData.shiftIds) && userData.shiftIds.filter(Boolean).length > 0) {
             userData.shiftIds = userData.shiftIds.filter(Boolean);
-            if (userData.shiftIds.length > 0) {
-                userData.shiftId = userData.shiftIds[0];
-            }
+            userData.shiftId = userData.shiftIds[0];
+        } else if (userData.shiftId) {
+            userData.shiftIds = [userData.shiftId];
         }
 
         // Explicit duplicate-phone guard — don't rely solely on the DB unique
@@ -380,16 +380,24 @@ exports.updateUser = async (req, res) => {
         });
 
         // Multi-branch support: keep primary branchId in sync with branchIds
-        if (Array.isArray(updateData.branchIds)) {
+        if (Array.isArray(updateData.branchIds) && updateData.branchIds.filter(Boolean).length > 0) {
             updateData.branchIds = updateData.branchIds.filter(Boolean);
-            updateData.branchId = updateData.branchIds.length > 0 ? updateData.branchIds[0] : null;
+            updateData.branchId = updateData.branchIds[0];
+        } else if (updateData.branchId) {
+            updateData.branchIds = [updateData.branchId];
+        } else if (Array.isArray(updateData.branchIds) && updateData.branchIds.length === 0) {
+            updateData.branchId = null;
         }
 
         // Multi-shift support: keep primary shiftId (used for attendance/lateness
         // calculations) in sync with shiftIds — mirrors branchId/branchIds above.
-        if (Array.isArray(updateData.shiftIds)) {
+        if (Array.isArray(updateData.shiftIds) && updateData.shiftIds.filter(Boolean).length > 0) {
             updateData.shiftIds = updateData.shiftIds.filter(Boolean);
-            updateData.shiftId = updateData.shiftIds.length > 0 ? updateData.shiftIds[0] : null;
+            updateData.shiftId = updateData.shiftIds[0];
+        } else if (updateData.shiftId) {
+            updateData.shiftIds = [updateData.shiftId];
+        } else if (Array.isArray(updateData.shiftIds) && updateData.shiftIds.length === 0) {
+            updateData.shiftId = null;
         }
 
         console.log('[updateUser] Prepared updateData:', updateData);

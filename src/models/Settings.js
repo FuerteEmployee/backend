@@ -42,6 +42,7 @@ const SettingsSchema = new mongoose.Schema({
     attendance: {
         defaultShiftId: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift' },
         requireLocation: { type: Boolean, default: false },
+        officeRadius: { type: Number, default: 3000 },
         remotePunch: { type: Boolean, default: true },
         workDays: { type: [String], default: ['M', 'T', 'W', 'Th', 'F'] },
         reqHours: { type: Number, default: 8 },

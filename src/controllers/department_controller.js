@@ -4,13 +4,26 @@ const mongoose = require('mongoose');
 
 exports.getDepartments = async (req, res) => {
     try {
+        const adminIdObj = new mongoose.Types.ObjectId(req.adminId);
         const departments = await Department.aggregate([
-            { $match: { adminId: new mongoose.Types.ObjectId(req.adminId) } },
+            { $match: { adminId: adminIdObj } },
             {
                 $lookup: {
                     from: 'users',
-                    localField: '_id',
-                    foreignField: 'departmentId',
+                    let: { deptId: '$_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$adminId', adminIdObj] },
+                                        { $eq: ['$role', 'employee'] },
+                                        { $eq: ['$departmentId', '$$deptId'] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
                     as: 'employees'
                 }
             },

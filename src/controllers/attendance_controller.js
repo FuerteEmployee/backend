@@ -135,7 +135,8 @@ exports.punchIn = async (req, res) => {
             const distance = nearestBranchDistance(location.lat, location.lng, branches);
             if (Number.isFinite(distance)) punchInDistance = Math.round(distance);
 
-            if (rules.requireLocation && distance > 300) { // 300 meters limit (generous for GPS inaccuracy)
+            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({
                     message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)`,
                     distance: Math.round(distance)
@@ -236,7 +237,8 @@ exports.punchOut = async (req, res) => {
             const distance = nearestBranchDistance(location.lat, location.lng, branches);
             if (Number.isFinite(distance)) punchOutDistance = Math.round(distance);
 
-            if (rules.requireLocation && distance > 300) {
+            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
         } else if (!attendance.isWFH && rules.requireLocation && branches.length === 0) {
@@ -337,7 +339,8 @@ exports.lunchIn = async (req, res) => {
             const distance = nearestBranchDistance(location.lat, location.lng, lunchInBranches);
             if (Number.isFinite(distance)) lunchInDistance = Math.round(distance);
 
-            if (rules.requireLocation && distance > 300) {
+            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
         } else if (rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchInBranches.length === 0) {
@@ -400,7 +403,8 @@ exports.lunchOut = async (req, res) => {
             const distance = nearestBranchDistance(location.lat, location.lng, lunchOutBranches);
             if (Number.isFinite(distance)) lunchOutDistance = Math.round(distance);
 
-            if (rules.requireLocation && distance > 300) {
+            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
         } else if (rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchOutBranches.length === 0) {
