@@ -78,7 +78,10 @@ exports.punchIn = async (req, res) => {
         const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
 
-        const allowMultiple = settings?.attendance?.allowMultiplePunches || false;
+        // Camera-detected punches (BOTLens) reflect physical reality — the
+        // person genuinely left and came back — so they always get to
+        // re-punch regardless of the tenant's app-facing policy toggle.
+        const allowMultiple = req.isDevicePunch || settings?.attendance?.allowMultiplePunches || false;
 
         if (attendance) {
             if (!allowMultiple) {
@@ -569,6 +572,41 @@ exports.getStats = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
+};
+
+// Entry point for trusted devices (e.g. the BOTLens camera service) acting on
+// behalf of an employee who isn't logged in themselves. Auth is a shared
+// secret (see device_attendance_routes.js), so adminId/employeeId are taken
+// from the request body instead of a decoded JWT, then delegated to the same
+// punch handlers used by the employee-facing routes.
+exports.devicePunch = async (req, res) => {
+    const { adminId, employeeId, action } = req.body;
+    if (!adminId || !employeeId || !action) {
+        return res.status(400).json({ message: 'adminId, employeeId and action are required' });
+    }
+
+    const handlers = { 'punch-in': exports.punchIn, 'punch-out': exports.punchOut, 'lunch-in': exports.lunchIn, 'lunch-out': exports.lunchOut };
+    const handler = handlers[action];
+    if (!handler) {
+        return res.status(400).json({ message: `Invalid action '${action}'. Expected one of: ${Object.keys(handlers).join(', ')}` });
+    }
+
+    // The calling device (BOTLens) sends its own locally-cached adminId, which
+    // can drift out of sync with the employee's actual tenant (e.g. if it gets
+    // re-linked). Cross-check against the User doc's real adminId rather than
+    // trusting the request blindly — otherwise a stale/wrong adminId silently
+    // creates attendance under the wrong company instead of erroring.
+    const employee = await User.findById(employeeId);
+    if (!employee) {
+        return res.status(404).json({ message: 'Employee not found' });
+    }
+    if (String(employee.adminId) !== String(adminId)) {
+        return res.status(409).json({ message: 'adminId does not match this employee\'s actual tenant — refusing to record attendance under the wrong company' });
+    }
+
+    req.adminId = adminId;
+    req.userId = employeeId;
+    return handler(req, res);
 };
 
 exports.getEmployeeHistory = async (req, res) => {

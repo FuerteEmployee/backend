@@ -3,6 +3,8 @@ const Attendance = require('../models/Attendance');
 const Festival = require('../models/Festival');
 const Subscription = require('../models/Subscription');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const mongoose = require('mongoose');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
 
@@ -22,16 +24,21 @@ const generateToken = (user) => {
 // --- AUTH LOGIC ---
 
 exports.loginRequest = async (req, res) => {
-    const { phone } = req.body;
+    const { phone, app } = req.body;
     try {
         // Find any user with this phone number
         let user = await User.findOne({ phone });
 
-        const otp = "123456";
-        const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
-
         if (!user) {
             return res.status(404).json({ message: 'You are not registered. Please contact your admin to register you first.' });
+        }
+
+        // BOTLens (the camera console) is admin-only — employees mark attendance
+        // via the camera itself, they never need to log in there. Gated here
+        // server-side, keyed off an `app` flag the BOTLens client sends, so the
+        // shared login endpoint stays unrestricted for every other caller.
+        if (app === 'botlens' && user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only company admins can access BOTLens. Please contact your administrator.' });
         }
 
         if (user.status === 'inactive') {
@@ -42,11 +49,15 @@ exports.loginRequest = async (req, res) => {
             });
         }
 
-        // Update existing user with OTP
+        // No SMS gateway is wired up — the OTP is shown directly on screen, so
+        // it's generated here and returned as-is rather than sent out-of-band.
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
         user.otp = otp;
         user.otpExpiry = otpExpiry;
         await user.save();
-        res.status(200).json({ message: 'OTP sent successfully (Mock: 123456)' });
+        res.status(200).json({ message: 'OTP generated', otp });
     } catch (error) {
         console.error("Login Request Error:", error);
         res.status(500).json({ message: error.message });
@@ -54,11 +65,18 @@ exports.loginRequest = async (req, res) => {
 };
 
 exports.verifyOtp = async (req, res) => {
-    const { phone, otp } = req.body;
+    const { phone, otp, app } = req.body;
     try {
         const user = await User.findOne({ phone });
         if (!user || user.otp !== otp || user.otpExpiry < new Date()) {
             return res.status(400).json({ message: 'Invalid or expired OTP' });
+        }
+
+        // Re-checked here (not just at login-request) so an OTP issued via
+        // another app's login flow can't be replayed against BOTLens for a
+        // non-admin phone number.
+        if (app === 'botlens' && user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only company admins can access BOTLens. Please contact your administrator.' });
         }
 
         if (user.status === 'inactive') {
@@ -104,6 +122,33 @@ exports.verifyOtp = async (req, res) => {
         });
     } catch (error) {
         console.error("Verify OTP Error:", error);
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Re-confirms the logged-in admin's identity using the separate BOTLens
+// email+password pair (set by the super admin), before BOTLens allows adding
+// a new employee. Deliberately not a login endpoint — it issues no token,
+// it only checks the credentials against the account already authenticated
+// by the request's JWT.
+exports.verifyBotlensCredentials = async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await User.findById(req.userId);
+        if (!user || !user.botlensEmail || !user.botlensPasswordEnc) {
+            return res.status(403).json({ message: 'No BOTLens credentials are configured for this account. Ask your super admin to set them first.' });
+        }
+        if (!email || user.botlensEmail.toLowerCase() !== String(email).trim().toLowerCase()) {
+            return res.status(401).json({ message: 'Incorrect email or password' });
+        }
+        const actual = decryptSecret(user.botlensPasswordEnc) || '';
+        const given = password || '';
+        const match = actual.length === given.length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(given));
+        if (!match) {
+            return res.status(401).json({ message: 'Incorrect email or password' });
+        }
+        res.json({ ok: true });
+    } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };

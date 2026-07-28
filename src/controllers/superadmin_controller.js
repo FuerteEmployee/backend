@@ -11,6 +11,7 @@ const Branch = require('../models/Branch');
 const Department = require('../models/Department');
 const Expense = require('../models/Expense');
 const mongoose = require('mongoose');
+const { encrypt: encryptSecret, decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
 
 // ─── OVERVIEW / DASHBOARD ────────────────────────────────────────────────────
@@ -172,7 +173,7 @@ exports.getTenants = async (req, res) => {
 
         // Get subscriptions with populated data
         const subs = await Subscription.find(baseFilter)
-            .populate('adminId', 'name phone email companyName isActive createdAt')
+            .populate('adminId', 'name phone email companyName isActive createdAt botlensEmail botlensPasswordEnc')
             .populate('planId', 'name slug color price maxEmployees')
             .sort({ updatedAt: -1 })
             .lean();
@@ -204,6 +205,15 @@ exports.getTenants = async (req, res) => {
         const total = filtered.length;
         const start = (page - 1) * limit;
         const paginated = filtered.slice(start, start + parseInt(limit));
+
+        // Decrypt for display only on this page's worth of results, and never
+        // ship the raw encrypted blob to the client.
+        paginated.forEach(s => {
+            if (s.adminId) {
+                s.adminId.botlensPassword = decryptSecret(s.adminId.botlensPasswordEnc);
+                delete s.adminId.botlensPasswordEnc;
+            }
+        });
 
         res.json({
             tenants: paginated,
@@ -282,11 +292,23 @@ exports.getTenant = async (req, res) => {
 
 exports.updateTenant = async (req, res) => {
     try {
-        const { planId, status, billingCycle, trialEndDate, bannerThresholdDays, note } = req.body;
+        const { planId, status, billingCycle, trialEndDate, bannerThresholdDays, note, email, password } = req.body;
 
         const sub = await Subscription.findOne({ adminId: req.params.id }).populate('planId');
         if (!sub) {
             return res.status(404).json({ message: 'Tenant subscription not found' });
+        }
+
+        // BOTLens confirm-identity credentials, assigned here rather than
+        // through the tenant's own phone+OTP login. Blank email clears it;
+        // blank/omitted password leaves the existing hash untouched.
+        if (email !== undefined || password) {
+            const admin = await User.findById(req.params.id);
+            if (admin) {
+                if (email !== undefined) admin.botlensEmail = email || null;
+                if (password) admin.botlensPasswordEnc = encryptSecret(password);
+                await admin.save();
+            }
         }
 
         const oldPlanId = sub.planId?._id;
@@ -366,8 +388,14 @@ exports.updateTenant = async (req, res) => {
         await sub.save();
 
         const updated = await Subscription.findById(sub._id)
-            .populate('adminId', 'name phone email companyName')
-            .populate('planId');
+            .populate('adminId', 'name phone email companyName botlensEmail botlensPasswordEnc')
+            .populate('planId')
+            .lean();
+
+        if (updated.adminId) {
+            updated.adminId.botlensPassword = decryptSecret(updated.adminId.botlensPasswordEnc);
+            delete updated.adminId.botlensPasswordEnc;
+        }
 
         res.json(updated);
     } catch (error) {
