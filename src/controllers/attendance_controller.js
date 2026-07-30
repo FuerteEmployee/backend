@@ -556,7 +556,7 @@ exports.getStats = async (req, res) => {
             Regularization.countDocuments({ adminId: req.adminId, status: 'pending' }),
         ]);
 
-        const presentToday = todayRecords.filter(r => ['present', 'late', 'wfh'].includes(r.status)).length;
+        const presentToday = todayRecords.filter(r => ['present', 'late', 'wfh', 'half-day'].includes(r.status)).length;
         const lateArrivals = todayRecords.filter(r => r.status === 'late' || r.wasLate).length;
         const missingPunch = todayRecords.filter(r => r.punchIn && !r.punchOut).length;
         const absentToday = Math.max(0, activeEmployeeCount - todayRecords.length);
