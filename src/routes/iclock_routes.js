@@ -6,9 +6,12 @@ const { handshake, pushData, getRequest, deviceCmdAck } = require('../controller
 // never JSON — parse as raw text regardless of the Content-Type they send.
 router.use(express.text({ type: () => true, limit: '5mb' }));
 
-router.get('/cdata', handshake);
-router.post('/cdata', pushData);
-router.get('/getrequest', getRequest);
-router.post('/devicecmd', deviceCmdAck);
+// Some eSSL/ZKTeco firmware (e.g. this MB20+ID's "iClock Proxy" client) calls
+// these with a trailing ".aspx" (an ASP.NET-era holdover), others call them
+// extension-less — register both so either firmware variant is served.
+router.get(['/cdata', '/cdata.aspx'], handshake);
+router.post(['/cdata', '/cdata.aspx'], pushData);
+router.get(['/getrequest', '/getrequest.aspx'], getRequest);
+router.post(['/devicecmd', '/devicecmd.aspx'], deviceCmdAck);
 
 module.exports = router;
