@@ -34,6 +34,12 @@ const UserSchema = new mongoose.Schema({
     shiftIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Shift' }], // all shifts assigned, when multi-shift is enabled
     profileImage: { type: String },
 
+    // PIN this employee is enrolled under on a physical biometric device (e.g.
+    // the eSSL MB20+ID). Set by the admin to match whatever number the device
+    // assigned during fingerprint/face enrollment, so pushed punch logs
+    // (identified only by this PIN, not a name) can be matched back to a User.
+    deviceUserId: { type: String, default: null },
+
     // Separate email+password pair assigned by the super admin, unrelated to
     // phone+OTP login. BOTLens (the camera console) requires re-entering these
     // before adding a new employee, so an unattended/borrowed admin session
@@ -143,5 +149,6 @@ const UserSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 UserSchema.index({ adminId: 1, role: 1 });
+UserSchema.index({ adminId: 1, deviceUserId: 1 }, { sparse: true });
 
 module.exports = mongoose.model('User', UserSchema);

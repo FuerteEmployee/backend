@@ -47,6 +47,9 @@ app.use("/api/departments", require("./routes/department_routes"));
 app.use("/api/branches", require("./routes/branch_routes"));
 app.use("/api/attendance", require("./routes/attendance_routes"));
 app.use("/api/device/attendance", require("./routes/device_attendance_routes"));
+// Biometric devices (eSSL/ZKTeco ADMS protocol) hit /iclock/* directly at the
+// domain root — the path is hardcoded in device firmware, not configurable.
+app.use("/iclock", require("./routes/iclock_routes"));
 app.use("/api/salary", require("./routes/salary_routes"));
 app.use("/api/advance-salary", require("./routes/advanceSalary"));
 app.use("/api/tickets", require("./routes/ticket_routes"));
