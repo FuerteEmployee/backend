@@ -1,49 +1,60 @@
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
-const { punchIn, punchOut } = require('./attendance_controller');
+const Settings = require('../models/Settings');
+const { punchIn, punchOut, lunchIn, lunchOut } = require('./attendance_controller');
+const {
+    resolveDevice,
+    markSeen,
+    markPunch,
+    recordUnresolved,
+} = require('../utils/device_registry');
+const punchSequence = require('../utils/punch_sequence');
 
-// Maps a device serial number to the admin (tenant) it belongs to, via
-// ESSL_DEVICES="SN:adminPhone,SN2:adminPhone2" in env. The device itself has
-// no concept of tenants — it only ever sends its own SN and a raw PIN — so
-// this is the one place that decides which company's data a push lands in.
-function parseDeviceMap() {
-    const raw = process.env.ESSL_DEVICES || '';
-    const map = {};
-    raw.split(',').map(s => s.trim()).filter(Boolean).forEach(pair => {
-        const [sn, phone] = pair.split(':').map(s => s.trim());
-        if (sn && phone) map[sn] = phone;
-    });
-    return map;
-}
+// Maps a resolved action name to the handler that records it.
+const HANDLERS = {
+    'punch-in': punchIn,
+    'punch-out': punchOut,
+    'lunch-in': lunchIn,
+    'lunch-out': lunchOut,
+};
 
-// adminPhone rarely changes once configured, so cache the resolved adminId
-// in memory rather than re-querying on every device push/heartbeat.
-const adminIdCache = new Map();
+// A device has no concept of tenants — it only ever sends its own serial number
+// and a raw PIN. Which company a push belongs to is decided entirely by the
+// Device registry (see utils/device_registry.js), which the super admin manages
+// from the Machines screen. Serial numbers are unique platform-wide, so a given
+// machine can only ever resolve to one tenant.
 
-async function resolveAdminId(serialNumber) {
-    const deviceMap = parseDeviceMap();
-    const phone = deviceMap[serialNumber];
-    if (!phone) return null;
-
-    if (adminIdCache.has(phone)) return adminIdCache.get(phone);
-
-    const admin = await User.findOne({ phone, role: 'admin' }).select('_id');
-    if (!admin) return null;
-
-    adminIdCache.set(phone, admin._id);
-    return admin._id;
-}
-
-// Determines whether a pushed punch event should be treated as a punch-in or
-// punch-out, based on today's existing Attendance record — the device's own
-// Status field (0/1) is unreliable across configs, so we derive it the same
-// way the employee-facing app effectively does: no open record → punch in;
-// an open (not-yet-punched-out) record → punch out.
-async function resolveAction(adminId, employeeId) {
+// Decides what a pushed punch event MEANS. The device's own Status field (0/1)
+// is unreliable across configs, so we never trust it.
+//
+// Two modes:
+//  • Sequence configured (Settings.attendance.punchSequence.enabled) — the tap
+//    becomes the first step of the tenant's sequence that hasn't happened yet,
+//    so four taps can mean in / leave for lunch / back / out.
+//  • Otherwise, the legacy toggle: no open record → punch in, open → punch out.
+//
+// Returns { action, reason }. A null action means "don't record this tap".
+async function resolveAction(adminId, employeeId, seqConfig) {
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const existing = await Attendance.findOne({ adminId, employeeId, date: today }).select('punchOut');
-    if (!existing || existing.punchOut) return 'punch-in';
-    return 'punch-out';
+    const existing = await Attendance.findOne({ adminId, employeeId, date: today })
+        .select('punchIn punchOut lunchInTime lunchOutTime');
+
+    const legacyToggle = () =>
+        (!existing || existing.punchOut) ? 'punch-in' : 'punch-out';
+
+    if (!seqConfig || !seqConfig.enabled) {
+        return { action: legacyToggle(), reason: 'toggle' };
+    }
+
+    const next = punchSequence.nextAction(existing, seqConfig);
+    if (next) return { action: next, reason: 'sequence' };
+
+    // Every configured step is done for today.
+    if (seqConfig.afterLast === 'toggle') {
+        // Second shift: re-open the day the legacy way.
+        return { action: legacyToggle(), reason: 'sequence-complete-toggle' };
+    }
+    return { action: null, reason: 'sequence_complete' };
 }
 
 function callHandler(handler, adminId, employeeId) {
@@ -63,6 +74,12 @@ function callHandler(handler, adminId, employeeId) {
 exports.handshake = (req, res) => {
     const sn = req.query.SN || 'unknown';
     console.log(`[iclock] handshake from SN=${sn}`);
+
+    // Register/refresh the machine on handshake, not just on its first punch —
+    // this is what makes a newly plugged-in device appear in the Machines screen
+    // straight away, before anybody has punched on it.
+    resolveDevice(sn).catch(err => console.error('[iclock] handshake device resolve failed:', err.message));
+
     res.type('text/plain').send(
         `GET OPTION FROM: ${sn}\r\n` +
         `Stamp=9999\r\n` +
@@ -87,35 +104,113 @@ exports.pushData = async (req, res) => {
 
     if (table !== 'ATTLOG') {
         console.log(`[iclock] ignoring table=${table || '(none)'} from SN=${sn}`);
-        return res.type('text/plain').send('OK');
-    }
-
-    const adminId = await resolveAdminId(sn);
-    if (!adminId) {
-        console.error(`[iclock] unrecognized device SN=${sn} — check ESSL_DEVICES env var`);
+        markSeen(sn);
         return res.type('text/plain').send('OK');
     }
 
     const lines = body.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    // Resolve which company this machine belongs to. Unknown serials are
+    // auto-registered as unassigned rather than thrown away, so the machine
+    // shows up in the Machines screen ready to claim.
+    const device = await resolveDevice(sn);
+
+    if (!device) {
+        console.error(`[iclock] push with no usable serial number (SN=${sn}) — ignoring`);
+        return res.type('text/plain').send('OK');
+    }
+
+    // Not yet claimed, or deliberately switched off. Log each dropped punch
+    // against the device so the reason is visible in the UI instead of only in
+    // a server log line — otherwise the device beeps and accepts the employee
+    // while nothing is recorded anywhere.
+    if (!device.adminId || device.status !== 'active') {
+        const reason = !device.adminId ? 'unassigned_device' : 'disabled_device';
+        for (const line of lines) {
+            const [pin, deviceTime] = line.split('\t');
+            if (pin) recordUnresolved(sn, { pin, reason, deviceTime });
+        }
+        console.warn(
+            `[iclock] SN=${sn} is ${reason === 'unassigned_device' ? 'not assigned to any customer' : 'disabled'} — ` +
+            `dropped ${lines.length} punch(es). Assign it under Super admin → Machines.`
+        );
+        return res.type('text/plain').send('OK');
+    }
+
+    const adminId = device.adminId;
+
+    // One Settings read per push batch, not per line.
+    const settings = await Settings.findOne({ adminId }).select('attendance');
+    const seqConfig = punchSequence.resolveConfig(settings);
+    if (seqConfig.configInvalid) {
+        console.warn(
+            `[iclock] adminId=${adminId} has an invalid punch sequence saved — ` +
+            'falling back to the in/out toggle so attendance keeps recording.'
+        );
+    }
+
     let processed = 0;
 
     for (const line of lines) {
-        const [pin, time] = line.split('\t');
-        if (!pin || !time) continue;
+        const [pin, deviceTime] = line.split('\t');
+        if (!pin || !deviceTime) continue;
 
         try {
-            const employee = await User.findOne({ adminId, deviceUserId: pin, role: 'employee' }).select('_id');
-            if (!employee) {
+            // Scoped by adminId, always. This is what guarantees a punch on this
+            // machine can only ever resolve to an employee of the company that
+            // owns it — another firm reusing the same PIN is unreachable from here.
+            const matches = await User.find({
+                adminId,
+                deviceUserId: String(pin).trim(),
+                role: 'employee',
+            }).select('_id name status').limit(2);
+
+            if (matches.length === 0) {
                 console.warn(`[iclock] no employee with deviceUserId=${pin} for adminId=${adminId}`);
+                recordUnresolved(sn, { pin, reason: 'unknown_pin', deviceTime });
                 continue;
             }
 
-            const action = await resolveAction(adminId, employee._id);
-            const handler = action === 'punch-in' ? punchIn : punchOut;
+            // Belt-and-braces against a pre-existing duplicate that slipped in
+            // before the unique index existed. Attributing a punch to an
+            // arbitrary one of two people is worse than not recording it, since
+            // it silently corrupts both employees' payroll.
+            if (matches.length > 1) {
+                console.error(
+                    `[iclock] AMBIGUOUS PIN: deviceUserId=${pin} matches ${matches.length} employees ` +
+                    `for adminId=${adminId} — refusing to guess. Fix the duplicate Biometric Device ID.`
+                );
+                recordUnresolved(sn, { pin, reason: 'duplicate_pin', deviceTime });
+                continue;
+            }
+
+            const employee = matches[0];
+
+            const { action, reason } = await resolveAction(adminId, employee._id, seqConfig);
+
+            // Sequence finished for today and the tenant chose to ignore extras.
+            // Discarding beats guessing: without this an accidental second tap
+            // after punch-out would reopen the day and corrupt the hours.
+            if (!action) {
+                console.log(
+                    `[iclock] ${employee.name} (PIN ${pin}) has completed today's punch sequence — extra tap ignored`
+                );
+                recordUnresolved(sn, { pin, reason: 'sequence_complete', deviceTime });
+                continue;
+            }
+
+            const handler = HANDLERS[action];
+            if (!handler) {
+                console.error(`[iclock] no handler for action "${action}" — skipping PIN ${pin}`);
+                continue;
+            }
+
             const result = await callHandler(handler, adminId, employee._id);
 
             if (result.ok) {
                 processed++;
+                markPunch(sn);
+                console.log(`[iclock] ${employee.name} (PIN ${pin}) → ${action} [${reason}]`);
             } else {
                 console.warn(`[iclock] ${action} rejected for deviceUserId=${pin}: ${result.body?.message}`);
             }
@@ -124,13 +219,16 @@ exports.pushData = async (req, res) => {
         }
     }
 
-    console.log(`[iclock] processed ${processed}/${lines.length} ATTLOG line(s) from SN=${sn}`);
+    console.log(`[iclock] processed ${processed}/${lines.length} ATTLOG line(s) from SN=${sn} (adminId=${adminId})`);
     res.type('text/plain').send(`OK: ${processed}`);
 };
 
 // GET /iclock/getrequest — device polls for pending commands. We never queue
 // any, so always reply with no-op.
 exports.getRequest = (req, res) => {
+    // This is the ~30s heartbeat, so it doubles as the liveness signal behind
+    // "last seen" in the Machines screen.
+    if (req.query.SN) markSeen(req.query.SN);
     res.type('text/plain').send('OK');
 };
 

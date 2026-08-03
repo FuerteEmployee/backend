@@ -24,6 +24,14 @@ const {
     deletePlanFeature,
     getSystemAnalytics
 } = require('../controllers/superadmin_controller');
+const {
+    getDevices,
+    createDevice,
+    updateDevice,
+    deleteDevice,
+    clearUnresolved,
+    getDevicePinMap,
+} = require('../controllers/device_controller');
 
 // All routes require superadmin authentication
 router.use(protect, superAdminOnly);
@@ -62,5 +70,14 @@ router.put('/invoices/:id', updateInvoice);
 // Alert rules
 router.get('/alerts', getAlerts);
 router.put('/alerts/:slug', toggleAlert);
+
+// Biometric machines (eSSL/ZKTeco terminals). Claiming a serial number decides
+// which company's attendance its punches land in, so this stays super-admin only.
+router.get('/devices', getDevices);
+router.post('/devices', createDevice);
+router.get('/devices/:id/pin-map', getDevicePinMap);
+router.post('/devices/:id/clear-unresolved', clearUnresolved);
+router.put('/devices/:id', updateDevice);
+router.delete('/devices/:id', deleteDevice);
 
 module.exports = router;

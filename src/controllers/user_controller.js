@@ -8,6 +8,44 @@ const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const mongoose = require('mongoose');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
 
+/**
+ * Normalise a Biometric Device ID (the PIN an employee is enrolled under on a
+ * physical eSSL/ZKTeco terminal) and reject duplicates within the tenant.
+ *
+ * A pushed punch identifies the person by nothing but this PIN, so it has to map
+ * to exactly one employee per company. Blank input becomes null rather than ""
+ * so unmapped employees don't all collide with each other under the partial
+ * unique index on { adminId, deviceUserId }.
+ *
+ * Mutates `data` in place. Returns an error message string, or null if fine.
+ */
+async function normalizeDeviceUserId(data, adminId, excludeUserId = null) {
+    if (!Object.prototype.hasOwnProperty.call(data, 'deviceUserId')) return null;
+
+    const raw = data.deviceUserId;
+    const trimmed = raw === null || raw === undefined ? '' : String(raw).trim();
+
+    if (!trimmed) {
+        data.deviceUserId = null;
+        return null;
+    }
+
+    data.deviceUserId = trimmed;
+
+    const query = { adminId: new mongoose.Types.ObjectId(adminId), deviceUserId: trimmed };
+    if (excludeUserId) {
+        query._id = { $ne: mongoose.Types.ObjectId.isValid(excludeUserId)
+            ? new mongoose.Types.ObjectId(excludeUserId)
+            : excludeUserId };
+    }
+
+    const clash = await User.findOne(query).select('name');
+    if (clash) {
+        return `Biometric Device ID "${trimmed}" is already assigned to ${clash.name}. Each employee needs a unique ID, otherwise punches from the machine can't tell them apart.`;
+    }
+    return null;
+}
+
 // Generate JWT
 const generateToken = (user) => {
     return jwt.sign(
@@ -377,6 +415,12 @@ exports.createUser = async (req, res) => {
             }
         }
 
+        // Biometric PIN must be unique within the company — see normalizeDeviceUserId.
+        const deviceIdError = await normalizeDeviceUserId(userData, req.adminId);
+        if (deviceIdError) {
+            return res.status(409).json({ message: deviceIdError });
+        }
+
         // Enforce employee seat limit check
         if (userData.role === 'employee' && req.adminId) {
             const subscription = await Subscription.findOne({ adminId: req.adminId }).populate('planId');
@@ -459,6 +503,12 @@ exports.updateUser = async (req, res) => {
             if (existing) {
                 return res.status(409).json({ message: `This phone number (${updateData.phone}) is already registered. Please use a different phone number.` });
             }
+        }
+
+        // Biometric PIN must stay unique within the company — see normalizeDeviceUserId.
+        const deviceIdError = await normalizeDeviceUserId(updateData, req.adminId, req.params.id);
+        if (deviceIdError) {
+            return res.status(409).json({ message: deviceIdError });
         }
 
         const user = await User.findOneAndUpdate(

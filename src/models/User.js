@@ -149,6 +149,19 @@ const UserSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 UserSchema.index({ adminId: 1, role: 1 });
-UserSchema.index({ adminId: 1, deviceUserId: 1 }, { sparse: true });
+
+// A biometric PIN must identify exactly ONE employee within a company, because
+// a pushed punch carries nothing but that PIN — two matches and the punch would
+// be credited to an arbitrary one of them, silently corrupting both payrolls.
+//
+// This is a PARTIAL index, not a sparse one: for a compound index Mongo indexes
+// a document when *any* key is present, and adminId always is, so every
+// employee with deviceUserId: null would be indexed and collide under `unique`.
+// partialFilterExpression is what actually excludes the unmapped ones.
+// Controllers normalise blank input to null so empty strings can't collide either.
+UserSchema.index(
+    { adminId: 1, deviceUserId: 1 },
+    { unique: true, partialFilterExpression: { deviceUserId: { $type: 'string' } } },
+);
 
 module.exports = mongoose.model('User', UserSchema);

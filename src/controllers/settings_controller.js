@@ -44,6 +44,19 @@ exports.updateSettings = async (req, res) => {
             updateData.attendance = JSON.parse(updateData.attendance);
         }
 
+        // Reject an unworkable punch sequence here rather than letting it fail
+        // silently at 9am on the floor. The downstream handlers have hard
+        // preconditions (lunch-out needs an existing lunch-in; nothing records
+        // after punch-out), so only certain orderings can actually execute.
+        const seq = updateData.attendance?.punchSequence;
+        if (seq && seq.enabled) {
+            const { validateSteps } = require('../utils/punch_sequence');
+            const check = validateSteps(seq.steps);
+            if (!check.ok) {
+                return res.status(400).json({ message: check.message });
+            }
+        }
+
         const settings = await Settings.findOneAndUpdate(
             { adminId: req.adminId },
             { $set: updateData },

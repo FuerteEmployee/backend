@@ -57,6 +57,29 @@ const SettingsSchema = new mongoose.Schema({
         // "overrun" — mirrors a field attendance-config.tsx already sends.
         maxLunch: { type: Number, default: 90 },
 
+        // ── What each successive punch of the day MEANS ──────────────────────
+        // A biometric terminal reports only "somebody was recognised"; it can't
+        // say whether the tap is an arrival, a lunch break or a departure. When
+        // enabled, steps[0] is what the 1st tap of the day does, steps[1] the
+        // 2nd, and so on — so four taps can mean in / leave for lunch / back /
+        // out. When disabled (default) the legacy toggle applies: no open
+        // record → punch in, open record → punch out.
+        //
+        // NOTE 'lunch-in' = the break STARTS, 'lunch-out' = back at work. See
+        // utils/punch_sequence.js — the ordering is enforced because
+        // attendance_controller.lunchOut requires an existing lunchInTime.
+        punchSequence: {
+            enabled: { type: Boolean, default: false },
+            steps: {
+                type: [String],
+                default: ['punch-in', 'lunch-in', 'lunch-out', 'punch-out'],
+            },
+            // What to do with taps once every step is done.
+            // 'ignore' → discard (an accidental extra tap can't reopen the day)
+            // 'toggle' → fall back to the legacy in/out toggle, for second shifts
+            afterLast: { type: String, enum: ['ignore', 'toggle'], default: 'ignore' },
+        },
+
         // ── Half-day rule configuration ──────────────────────────────────────
         // Admins choose which method (or combination) decides a half-day, so
         // the platform works for companies with different attendance policies.
