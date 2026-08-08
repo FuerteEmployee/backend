@@ -140,7 +140,26 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         };
     }
 
-    // ── LEGACY PATH (verbatim — no changes) ──────────────────────────────────
+    // ── LEGACY PATH ──────────────────────────────────────────────────────────
+    const joinDate = emp.joiningDate ? new Date(emp.joiningDate) : null;
+    const joinsThisMonth = joinDate && joinDate.getFullYear() === year && joinDate.getMonth() + 1 === month;
+    const startDay = joinsThisMonth ? joinDate.getDate() : 1;
+
+    // Guard if joined after the requested month
+    if (joinDate && joinDate > endDate) {
+        return {
+            baseSalary: emp.salary,
+            totalSalary: 0,
+            employmentType: emp.employmentType || 'monthly',
+            breakdown: { earnings: [], deductions: [] },
+            remarks: 'Joined after this pay period',
+            payableDays: 0,
+            grossSalary: 0,
+            netSalary: 0,
+            earnedSoFar: 0,
+        };
+    }
+
     const calcUpToDay_legacy = calcUpToDay; // alias for clarity
     const festivalDates = new Set();
     festivals.forEach(f => {
@@ -163,7 +182,7 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     let festivalCount = 0;
     const weeklyHolidays = emp.weeklyHolidays || [];
 
-    for (let d = 1; d <= calcUpToDay_legacy; d++) {
+    for (let d = startDay; d <= calcUpToDay_legacy; d++) {
         const date = new Date(year, month - 1, d);
         const dateStr = date.toISOString().split('T')[0];
         const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
@@ -182,6 +201,7 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     }
 
     const normalWorkingAttendance = attendanceRecords.reduce((sum, rec) => {
+        if (joinDate && rec.date < joinDate) return sum;
         const dateStr = rec.date.toISOString().split('T')[0];
         if (festivalDates.has(dateStr)) return sum;
         const dayName = rec.date.toLocaleDateString('en-US', { weekday: 'long' });

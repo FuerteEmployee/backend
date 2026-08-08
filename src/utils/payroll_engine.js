@@ -147,7 +147,11 @@ function classifyMonth({ emp, year, month, asOfDate, attendanceByKey, festivalSe
     const isFuture = year > now.getFullYear() || (year === now.getFullYear() && month > now.getMonth() + 1);
     const windowEnd = isFuture ? 0 : (isCurrentMonth ? now.getDate() : totalDaysInMonth);
 
-    const weeklyHolidays = emp.weeklyHolidays || [];
+    const joinDate = emp?.joiningDate ? new Date(emp.joiningDate) : null;
+    const joinsThisMonth = joinDate && joinDate.getFullYear() === year && joinDate.getMonth() + 1 === month;
+    const windowStart = joinsThisMonth ? joinDate.getDate() : 1;
+
+    const weeklyHolidays = emp?.weeklyHolidays || [];
     const days = [];
     let workingDaysInMonth = 0;
 
@@ -174,19 +178,19 @@ function classifyMonth({ emp, year, month, asOfDate, attendanceByKey, festivalSe
         days.push({
             d, dateKey, isHoliday, isOff, isWorkingDay, bucket, leave,
             workedOnOff: (isHoliday || isOff) && !!worked,
-            inWindow: d <= windowEnd,
+            inWindow: d >= windowStart && d <= windowEnd,
         });
     }
 
-    return { days, totalDaysInMonth, workingDaysInMonth, windowEnd, isCurrentMonth, isFuture };
+    return { days, totalDaysInMonth, workingDaysInMonth, windowStart, windowEnd, isCurrentMonth, isFuture };
 }
 
 // Sandwich rule: a weekly-off/holiday flanked by unexcused absence on BOTH the
 // nearest prior AND next working day (within the window) becomes unpaid (LOP).
 // At a window edge with only one neighbour, that single neighbour decides.
 // Days actually worked on the off-day are never stripped.
-function applySandwich(days, windowEnd) {
-    const inWin = days.filter((x) => x.d <= windowEnd);
+function applySandwich(days) {
+    const inWin = days.filter((x) => x.inWindow);
     const isAbsentLike = (x) => x && (x.bucket === 'absent' || x.bucket === 'unpaidLeave');
 
     for (let i = 0; i < inWin.length; i++) {
@@ -214,13 +218,13 @@ function applySandwich(days, windowEnd) {
 }
 
 // Tally bucket counts and the weighted payable-days for the window.
-function computeTotals(days, config, windowEnd) {
+function computeTotals(days, config) {
     const counts = Object.fromEntries(BUCKETS.map((b) => [b, 0]));
     let payableDays = 0;
     let holidayWorkedDays = 0;
 
     for (const day of days) {
-        if (day.d > windowEnd) continue;
+        if (!day.inWindow) continue;
         counts[day.bucket] = (counts[day.bucket] || 0) + 1;
 
         let w;
@@ -239,10 +243,11 @@ function computeTotals(days, config, windowEnd) {
 }
 
 // §9 validation gate — run before persisting/paying.
-function validateSalary({ counts, windowEnd, baseSalary, netSalary }) {
+function validateSalary({ counts, windowStart = 1, windowEnd, baseSalary, netSalary }) {
     const errors = [];
     const sum = BUCKETS.reduce((a, b) => a + (counts[b] || 0), 0);
-    if (sum !== windowEnd) errors.push(`Day-sum invariant failed: ${sum} classified vs ${windowEnd} days in window`);
+    const expectedWindowDays = windowEnd >= windowStart ? (windowEnd - windowStart + 1) : 0;
+    if (sum !== expectedWindowDays) errors.push(`Day-sum invariant failed: ${sum} classified vs ${expectedWindowDays} days in window`);
     if (!(baseSalary > 0)) errors.push('Base salary missing or non-positive');
     if (netSalary < 0) errors.push('Net salary is negative');
     return { ok: errors.length === 0, errors };
@@ -261,11 +266,11 @@ function runEngine({ emp, settings, year, month, attendanceRecords, festivals, l
     const workDays = settings && settings.attendance ? settings.attendance.workDays : undefined;
 
     const cls = classifyMonth({ emp, year, month, asOfDate, attendanceByKey, festivalSet, leaveByKey, workDays });
-    const { days, totalDaysInMonth, workingDaysInMonth, windowEnd, isCurrentMonth, isFuture } = cls;
+    const { days, totalDaysInMonth, workingDaysInMonth, windowStart, windowEnd, isCurrentMonth, isFuture } = cls;
 
-    if (config.sandwichRuleEnabled) applySandwich(days, windowEnd);
+    if (config.sandwichRuleEnabled) applySandwich(days);
 
-    const { counts, payableDays, holidayWorkedDays, bonusDays } = computeTotals(days, config, windowEnd);
+    const { counts, payableDays, holidayWorkedDays, bonusDays } = computeTotals(days, config);
 
     const dailyRate = getDailyRate(emp.salary, config.dailyRateBasis, { totalDaysInMonth, workingDaysInMonth });
     const earnedBase = dailyRate * payableDays;
@@ -283,14 +288,15 @@ function runEngine({ emp, settings, year, month, attendanceRecords, festivals, l
     }
     const projectedBase = dailyRate * projectedPayableDays;
 
+    const totalDaysInWindow = windowEnd >= windowStart ? (windowEnd - windowStart + 1) : 0;
     const invariantSum = BUCKETS.reduce((a, b) => a + (counts[b] || 0), 0);
-    const needsReview = invariantSum !== windowEnd;
+    const needsReview = invariantSum !== totalDaysInWindow;
 
     return {
         config, counts, payableDays, holidayWorkedDays, bonusDays,
         dailyRate, dailyRateBasis: config.dailyRateBasis,
         earnedBase, projectedBase, projectedPayableDays,
-        totalDaysInWindow: windowEnd, totalDaysInMonth, workingDaysInMonth,
+        totalDaysInWindow, totalDaysInMonth, workingDaysInMonth,
         isMTD: isCurrentMonth, isFuture, needsReview, invariantSum, days,
     };
 }
