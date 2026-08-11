@@ -1,7 +1,27 @@
-const DAY_LABELS = { 
-  M: "Monday", T: "Tuesday", W: "Wednesday", 
-  Th: "Thursday", F: "Friday", Sa: "Saturday", Su: "Sunday" 
+const DAY_LABELS = {
+  M: "Monday", T: "Tuesday", W: "Wednesday",
+  Th: "Thursday", F: "Friday", Sa: "Saturday", Su: "Sunday"
 };
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * Midnight IST for the calendar day containing `date` (defaults to now),
+ * returned as the equivalent UTC instant. Built from UTC methods + a fixed
+ * offset rather than date.setHours(0,0,0,0), which silently anchors to
+ * whatever timezone the *process* happens to be running in — UTC on most
+ * hosts, IST on a dev machine set to India — so the same moment can land on
+ * different calendar days depending on where the server happens to run.
+ * This is deterministic everywhere.
+ */
+const istStartOfDay = (date = new Date()) => {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - IST_OFFSET_MS);
+};
+
+/** End-of-day (23:59:59.999 IST) counterpart to istStartOfDay. */
+const istEndOfDay = (date = new Date()) => new Date(istStartOfDay(date).getTime() + 24 * 60 * 60 * 1000 - 1);
 
 /**
  * Determines if a given day is a weekly off for an employee.
@@ -163,4 +183,4 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   };
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus };
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay };

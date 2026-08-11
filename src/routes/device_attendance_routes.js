@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { devicePunch } = require('../controllers/attendance_controller');
+const { devicePunch, listDeviceEmployees, listDeviceEmployeeFaces, setDeviceEmployeeFace } = require('../controllers/attendance_controller');
 
 // Guards device endpoints with a shared secret so only trusted devices (e.g.
 // the BOTLens camera service) can punch attendance on an employee's behalf,
@@ -21,5 +21,8 @@ const requireDeviceSecret = (req, res, next) => {
 };
 
 router.post('/punch', requireDeviceSecret, (req, res, next) => { req.isDevicePunch = true; next(); }, devicePunch);
+router.get('/employees', requireDeviceSecret, listDeviceEmployees);
+router.get('/employees/faces', requireDeviceSecret, listDeviceEmployeeFaces);
+router.put('/employees/:employeeId/face', requireDeviceSecret, setDeviceEmployeeFace);
 
 module.exports = router;

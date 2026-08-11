@@ -8,6 +8,21 @@ const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const mongoose = require('mongoose');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
 
+// Best-effort notification to BOTLens so a deleted employee's face data is
+// purged there too — otherwise the camera keeps recognizing and punching
+// them in forever, since BOTLens keeps its own separate face-encoding store
+// keyed by this user's _id (external_user_id on its side). Fire-and-forget:
+// a deleted employee must never be blocked on BOTLens being reachable.
+const BOTLENS_API_URL = (process.env.BOTLENS_API_URL || 'https://botlens.beontimeofficial.com').replace(/\/$/, '');
+function purgeFromBotlens(externalUserId) {
+    if (!process.env.CAMERA_API_KEY) return;
+    fetch(`${BOTLENS_API_URL}/api/employees/external/${externalUserId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${process.env.CAMERA_API_KEY}` },
+        signal: AbortSignal.timeout(5000),
+    }).catch((e) => console.error('--- BOTLENS PURGE ERROR:', e.message, '---'));
+}
+
 // Generate JWT
 const generateToken = (user) => {
     return jwt.sign(
@@ -541,6 +556,10 @@ exports.deleteUser = async (req, res) => {
     try {
         const user = await User.findOneAndDelete({ _id: req.params.id, adminId: new mongoose.Types.ObjectId(req.adminId) });
         if (!user) return res.status(404).json({ message: 'User not found' });
+
+        if (user.role === 'employee') {
+            purgeFromBotlens(user._id.toString());
+        }
 
         // Sync employeesUsed count on the tenant's subscription (if subscription exists)
         if (user.role === 'employee' && req.adminId) {

@@ -8,7 +8,7 @@ const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
-const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -65,7 +65,7 @@ exports.punchIn = async (req, res) => {
         const employeeId = req.userId; // Use userId from protect middleware
         const { location, photo, isWFH, address } = req.body;
         const now = new Date();
-        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const today = istStartOfDay();
 
         // 1. Check if already punched in
         let attendance = await Attendance.findOne({
@@ -180,6 +180,7 @@ exports.punchIn = async (req, res) => {
             punchInDistance,
             punchInPhoto: photoUrl,
             status: finalStatus,
+            source: req.punchSource || 'app',
             isWFH: !!isWFH,
             remarks: isWFH ? 'Work From Home' : '',
             punchOut: null,
@@ -209,7 +210,7 @@ exports.punchOut = async (req, res) => {
         const employeeId = req.userId;
         const { location, photo, address } = req.body;
         const now = new Date();
-        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const today = istStartOfDay();
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -312,8 +313,8 @@ exports.lunchIn = async (req, res) => {
     try {
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -367,8 +368,8 @@ exports.lunchOut = async (req, res) => {
     try {
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -481,8 +482,7 @@ exports.markAbsent = async (req, res) => {
             return res.status(400).json({ message: 'employeeId and date are required' });
         }
 
-        const day = new Date(date);
-        day.setHours(0, 0, 0, 0);
+        const day = istStartOfDay(new Date(date));
 
         let attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -513,8 +513,8 @@ exports.markAbsent = async (req, res) => {
 // not-out and already has a record).
 exports.getAbsentToday = async (req, res) => {
     try {
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const [employees, todayRecords] = await Promise.all([
             User.find({ adminId: req.adminId, role: 'employee', status: 'active' })
@@ -541,8 +541,8 @@ exports.getAbsentToday = async (req, res) => {
 exports.getStats = async (req, res) => {
     try {
         const day = req.query.date ? new Date(req.query.date) : new Date();
-        const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
+        const dayStart = istStartOfDay(day);
+        const dayEnd = istEndOfDay(day);
 
         const [activeEmployeeCount, todayRecords, pendingRegularizations] = await Promise.all([
             User.countDocuments({ adminId: req.adminId, role: 'employee', status: 'active' }),
@@ -602,7 +602,68 @@ exports.devicePunch = async (req, res) => {
 
     req.adminId = adminId;
     req.userId = employeeId;
+    // Only BOTLens calls this route today, so 'lens' is correct for every
+    // caller currently. The optional body field lets a future biometric
+    // device identify itself over this same trusted endpoint without
+    // requiring its own route.
+    req.punchSource = req.body.source === 'biometric' ? 'biometric' : 'lens';
     return handler(req, res);
+};
+
+// Lets BOTLens reconcile its own face-encoding store against Node's actual
+// employee roster (see reconcile_employees_with_node in engine.py). Node
+// already best-effort notifies BOTLens the moment an employee is deleted,
+// but that call can fail silently (BOTLens down, network blip); this is the
+// periodic backstop BOTLens polls so a missed notification doesn't leave a
+// deleted employee able to punch in forever.
+exports.listDeviceEmployees = async (req, res) => {
+    const { adminId } = req.query;
+    if (!adminId) {
+        return res.status(400).json({ message: 'adminId is required' });
+    }
+    const employees = await User.find({ adminId, role: 'employee' }).select('_id');
+    res.json({ employeeIds: employees.map(e => e._id.toString()) });
+};
+
+// Lets a BOTLens camera bootstrap its local face-recognition store from
+// Node's shared collection — every employee under this admin who already has
+// a face registered on ANY camera, not just this one. Called when an admin
+// logs into BOTLens (see syncEmployeesFromNode in main.py), so a fresh or
+// second camera immediately recognizes everyone already registered elsewhere.
+exports.listDeviceEmployeeFaces = async (req, res) => {
+    const { adminId } = req.query;
+    if (!adminId) {
+        return res.status(400).json({ message: 'adminId is required' });
+    }
+    const employees = await User.find({ adminId, role: 'employee', faceEncoding: { $ne: null } })
+        .select('_id name phone faceEncoding facePhotoUrl');
+    res.json({ employees });
+};
+
+// The other direction: BOTLens pushes a newly-registered/edited face here
+// right after saving it locally, so it becomes available to every other
+// camera for this tenant. adminId is required in the body (device calls
+// carry no admin session) and is checked against the employee's actual
+// tenant — same defense-in-depth as requestPing in tracking_controller.js.
+// `photo` is a base64 data URL (the same format the punch-selfie flow already
+// uploads) — the local file path BOTLens stores has no meaning off that one
+// machine, so the actual bytes travel here and get a real, globally-reachable
+// Cloudinary URL, same as every other photo upload in this backend.
+exports.setDeviceEmployeeFace = async (req, res) => {
+    const { adminId, faceEncoding, photo } = req.body;
+    if (!adminId) {
+        return res.status(400).json({ message: 'adminId is required' });
+    }
+    const facePhotoUrl = photo ? await uploadToCloudinary(photo, 'employee-faces') : null;
+    const employee = await User.findOneAndUpdate(
+        { _id: req.params.employeeId, adminId, role: 'employee' },
+        { faceEncoding: faceEncoding ?? null, ...(facePhotoUrl ? { facePhotoUrl } : {}) },
+        { new: true }
+    ).select('_id name facePhotoUrl');
+    if (!employee) {
+        return res.status(404).json({ message: 'Employee not found for this admin' });
+    }
+    res.json({ success: true, employeeId: employee._id, facePhotoUrl: employee.facePhotoUrl });
 };
 
 exports.getEmployeeHistory = async (req, res) => {

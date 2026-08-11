@@ -136,6 +136,19 @@ const UserSchema = new mongoose.Schema({
     // admin opts each employee in from the Tracking page (employees are NOT
     // tracked unless explicitly enabled).
     trackingEnabled: { type: Boolean, default: false },
+    // Admin tapped "Ping" on the Tracking page — the employee's own running
+    // LocationTracker polls for this and, on seeing a newer timestamp than
+    // the last one it already handled, takes an immediate GPS fix instead of
+    // waiting for its normal interval.
+    lastPingRequestedAt: { type: Date, default: null },
+    // Face recognition data (BOTLens). Node is the source of truth so a face
+    // registered on ANY camera becomes recognizable on every camera for this
+    // tenant — BOTLens pushes here after registering a face locally, and
+    // pulls from here to bootstrap a fresh/other camera instance.
+    // faceEncoding is the same JSON-array-of-floats format BOTLens already
+    // stores in its own local Employee.face_encoding column.
+    faceEncoding: { type: String, default: null },
+    facePhotoUrl: { type: String, default: null },
     permissions: { type: mongoose.Schema.Types.Mixed, default: null },
     otp: { type: String },
     otpExpiry: { type: Date },

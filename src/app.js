@@ -23,6 +23,11 @@ const allowedOrigins = [
     "https://localhost:10000",
     "https://botlens.beontimeofficial.com",
 
+    // Render staging stack for testing the BOTLens<->backend face-sync
+    // feature before it goes live on the real domains.
+    "https://botcrm-frontend-test.onrender.com",
+    "https://botlens-test.onrender.com",
+
     // Capacitor native apps (Android/iOS WebView origins)
     "https://localhost",
     "http://localhost",
@@ -30,11 +35,19 @@ const allowedOrigins = [
     "ionic://localhost",
 ];
 
+// Vite's dev server picks the next free port (5173, 5174, 5175, ...) when
+// earlier ones are already in use by other local projects, so a fixed list
+// of localhost ports constantly falls out of date. A `localhost` origin is
+// never real production traffic, so allow any port for it regardless of
+// NODE_ENV (this backend's .env keeps NODE_ENV=production even for local runs).
+const isLocalhostOrigin = (origin) => /^https?:\/\/localhost(:\d+)?$/.test(origin);
+
 app.use(
     cors({
         origin: (origin, callback) => {
             if (!origin) return callback(null, true);
             if (allowedOrigins.includes(origin)) return callback(null, true);
+            if (isLocalhostOrigin(origin)) return callback(null, true);
             return callback(new Error(`CORS blocked: ${origin}`));
         },
         credentials: true,

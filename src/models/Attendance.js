@@ -30,6 +30,16 @@ const AttendanceSchema = new mongoose.Schema({
         enum: ['present', 'absent', 'half-day', 'late', 'wfh'],
         default: 'absent',
     },
+    // Which channel recorded this day's attendance. 'app' is the employee's own
+    // phone/web punch; 'lens' is BOTLens's camera-based device punch (see
+    // devicePunch in attendance_controller.js); 'biometric' is reserved for the
+    // fingerprint-device integration (Biometric Devices page) — not yet wired
+    // up to any ingestion endpoint, so it's never actually set today.
+    source: {
+        type: String,
+        enum: ['app', 'lens', 'biometric'],
+        default: 'app',
+    },
     // Work-from-home flag — first-class signal (was previously only a remarks
     // substring). Set on punch-in; lets payroll pay WFH at its own weight.
     isWFH: { type: Boolean, default: false },
