@@ -182,6 +182,23 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     let festivalCount = 0;
     const weeklyHolidays = emp.weeklyHolidays || [];
 
+    const isAbsentLikeLegacy = (dayNum) => {
+        const date = new Date(year, month - 1, dayNum);
+        const dateStr = date.toISOString().split('T')[0];
+        const rec = attendanceMap.get(dateStr);
+        if (!rec) return true;
+        return !['present', 'late', 'half-day', 'wfh'].includes(rec.status);
+    };
+
+    const isWorkingDayLegacy = (dayNum) => {
+        const date = new Date(year, month - 1, dayNum);
+        const dateStr = date.toISOString().split('T')[0];
+        const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+        const isFestival = festivalDates.has(dateStr);
+        const isOff = isWeeklyOff(dayName, dayNum, weeklyHolidays, settings?.attendance?.workDays);
+        return !isFestival && !isOff;
+    };
+
     for (let d = startDay; d <= calcUpToDay_legacy; d++) {
         const date = new Date(year, month - 1, d);
         const dateStr = date.toISOString().split('T')[0];
@@ -195,8 +212,37 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
             } else if (attendance && attendance.status === 'half-day') {
                 holidayWorkDays += 0.5;
             }
-            if (isFestival) festivalCount++;
-            else if (isOff) weeklyOffCount++;
+
+            let isSandwiched = false;
+            if (settings?.payroll?.sandwichRuleEnabled !== false) {
+                let prevWorkingDay = null;
+                for (let j = d - 1; j >= startDay; j--) {
+                    if (isWorkingDayLegacy(j)) {
+                        prevWorkingDay = j;
+                        break;
+                    }
+                }
+                let nextWorkingDay = null;
+                for (let j = d + 1; j <= calcUpToDay_legacy; j++) {
+                    if (isWorkingDayLegacy(j)) {
+                        nextWorkingDay = j;
+                        break;
+                    }
+                }
+
+                if (prevWorkingDay !== null && nextWorkingDay !== null) {
+                    isSandwiched = isAbsentLikeLegacy(prevWorkingDay) && isAbsentLikeLegacy(nextWorkingDay);
+                } else if (prevWorkingDay !== null) {
+                    isSandwiched = isAbsentLikeLegacy(prevWorkingDay);
+                } else if (nextWorkingDay !== null) {
+                    isSandwiched = isAbsentLikeLegacy(nextWorkingDay);
+                }
+            }
+
+            if (!isSandwiched || (attendance && ['present', 'late', 'half-day', 'wfh'].includes(attendance.status))) {
+                if (isFestival) festivalCount++;
+                else if (isOff) weeklyOffCount++;
+            }
         }
     }
 
@@ -207,11 +253,12 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         const dayName = rec.date.toLocaleDateString('en-US', { weekday: 'long' });
         const isOff = isWeeklyOff(dayName, rec.date.getDate(), weeklyHolidays, settings?.attendance?.workDays);
         if (isOff) return sum;
-        if (rec.status === 'present' || rec.status === 'late') return sum + 1;
+        if (rec.status === 'present' || rec.status === 'late' || rec.status === 'wfh') return sum + 1;
         if (rec.status === 'half-day') return sum + 0.5;
         return sum;
     }, 0);
 
+    const totalDaysInWindow = calcUpToDay_legacy - startDay + 1;
     const payableDays = normalWorkingAttendance + festivalCount + weeklyOffCount + (holidayWorkDays * 2);
     const employmentType = emp.employmentType || 'monthly';
     let earnedBase = 0;
@@ -314,6 +361,7 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         payableDays,
         grossSalary,
         netSalary,
+        totalDaysInWindow,
     };
 };
 
@@ -380,6 +428,8 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
         status,
         grossSalary: r.grossSalary,
         netSalary: r.netSalary,
+        payableDays: r.payableDays,
+        totalDaysInWindow: r.totalDaysInWindow,
     };
 
     if (r._engineEnabled) {
@@ -397,8 +447,6 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
 
         Object.assign(update, {
             buckets: r.buckets,
-            payableDays: r.payableDays,
-            totalDaysInWindow: r.totalDaysInWindow,
             dailyRateBasis: r.dailyRateBasisUsed,
             needsReview,
             status: needsReview ? 'review' : status,
