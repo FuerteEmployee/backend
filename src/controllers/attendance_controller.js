@@ -8,7 +8,7 @@ const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
-const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -65,7 +65,7 @@ exports.punchIn = async (req, res) => {
         const employeeId = req.userId; // Use userId from protect middleware
         const { location, photo, isWFH, address } = req.body;
         const now = new Date();
-        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const today = istStartOfDay(now);
 
         // 1. Check if already punched in
         let attendance = await Attendance.findOne({
@@ -181,6 +181,7 @@ exports.punchIn = async (req, res) => {
             punchInDistance,
             punchInPhoto: photoUrl,
             status: finalStatus,
+            source: req.isDevicePunch ? 'lens' : 'app',
             isWFH: !!isWFH,
             remarks: isWFH ? 'Work From Home' : '',
             punchOut: null,
@@ -210,7 +211,7 @@ exports.punchOut = async (req, res) => {
         const employeeId = req.userId;
         const { location, photo, address } = req.body;
         const now = new Date();
-        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const today = istStartOfDay(now);
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -314,8 +315,8 @@ exports.lunchIn = async (req, res) => {
     try {
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -370,8 +371,8 @@ exports.lunchOut = async (req, res) => {
     try {
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -485,8 +486,7 @@ exports.markAbsent = async (req, res) => {
             return res.status(400).json({ message: 'employeeId and date are required' });
         }
 
-        const day = new Date(date);
-        day.setHours(0, 0, 0, 0);
+        const day = istStartOfDay(new Date(date));
 
         let attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -517,8 +517,8 @@ exports.markAbsent = async (req, res) => {
 // not-out and already has a record).
 exports.getAbsentToday = async (req, res) => {
     try {
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const [employees, todayRecords] = await Promise.all([
             User.find({ adminId: req.adminId, role: 'employee', status: 'active' })
@@ -545,8 +545,8 @@ exports.getAbsentToday = async (req, res) => {
 exports.getStats = async (req, res) => {
     try {
         const day = req.query.date ? new Date(req.query.date) : new Date();
-        const dayStart = new Date(day); dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
+        const dayStart = istStartOfDay(day);
+        const dayEnd = istEndOfDay(day);
 
         const [activeEmployeeCount, todayRecords, pendingRegularizations] = await Promise.all([
             User.countDocuments({ adminId: req.adminId, role: 'employee', status: 'active' }),

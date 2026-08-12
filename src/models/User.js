@@ -142,6 +142,11 @@ const UserSchema = new mongoose.Schema({
     // admin opts each employee in from the Tracking page (employees are NOT
     // tracked unless explicitly enabled).
     trackingEnabled: { type: Boolean, default: false },
+    // Admin tapped "Ping" on the Tracking page — the employee's own running
+    // LocationTracker polls for this and, on seeing a newer timestamp than
+    // the last one it already handled, takes an immediate GPS fix instead of
+    // waiting for its normal interval.
+    lastPingRequestedAt: { type: Date, default: null },
     permissions: { type: mongoose.Schema.Types.Mixed, default: null },
     otp: { type: String },
     otpExpiry: { type: Date },

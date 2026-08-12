@@ -30,6 +30,13 @@ const AttendanceSchema = new mongoose.Schema({
         enum: ['present', 'absent', 'half-day', 'late', 'wfh'],
         default: 'absent',
     },
+    // Which channel recorded this day's attendance — the CRM shows a
+    // different icon per source (Phone app / Lens camera / Biometric device).
+    source: {
+        type: String,
+        enum: ['app', 'lens', 'biometric'],
+        default: 'app',
+    },
     // Work-from-home flag — first-class signal (was previously only a remarks
     // substring). Set on punch-in; lets payroll pay WFH at its own weight.
     isWFH: { type: Boolean, default: false },

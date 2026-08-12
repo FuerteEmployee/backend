@@ -39,6 +39,30 @@ const toLocalDateKey = (date) => {
   return `${y}-${m}-${day}`;
 };
 
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * IST midnight for the given instant, as a real UTC Date — independent of
+ * the server process's own OS/system timezone. `new Date(); setHours(0,0,0,0)`
+ * zeroes the hour in whatever timezone the process happens to be running in;
+ * on a UTC-timezone server (common for cloud VMs) that's UTC midnight, not
+ * IST midnight, and worse, it can silently disagree with itself across
+ * restarts/deploys if that effective timezone ever changes — producing two
+ * different "day" keys for what a human considers the same day (seen in
+ * practice: duplicate Attendance docs for the same employee+day).
+ */
+const istStartOfDay = (date = new Date()) => {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - IST_OFFSET_MS);
+};
+
+const istEndOfDay = (date = new Date()) => {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MS);
+  shifted.setUTCHours(23, 59, 59, 999);
+  return new Date(shifted.getTime() - IST_OFFSET_MS);
+};
+
 /**
  * Was a punch-in late relative to the employee's shift + grace period?
  * Parameterized on punchInDate (not `now`) so it can also validate a
@@ -163,4 +187,4 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   };
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus };
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay };
