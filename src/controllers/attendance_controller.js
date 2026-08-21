@@ -8,7 +8,7 @@ const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
-const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -103,7 +103,8 @@ exports.punchIn = async (req, res) => {
             attendance.punchOutLocation = null;
             attendance.punchOutCoordinates = null;
             attendance.punchOutPhoto = null;
-            
+            attendance.punchOutIsProvisional = false;
+
             attendance.shifts = attendance.shifts || [];
             attendance.shifts.push({ punchIn: now });
             
@@ -224,7 +225,16 @@ exports.punchOut = async (req, res) => {
         }
 
         if (attendance.punchOut) {
-            return res.status(400).json({ message: 'Already punched out today' });
+            // A device-set punchOut is provisional — it might just be the
+            // employee leaving for lunch, since Lens/biometric only ever send
+            // a generic in/out toggle. If the employee now explicitly punches
+            // out via the app, honor that as the real, final exit instead of
+            // blocking it. A second explicit punch-out (app or device) after
+            // an already-confirmed one is still rejected as normal.
+            const canOverrideProvisional = attendance.punchOutIsProvisional && !req.isDevicePunch;
+            if (!canOverrideProvisional) {
+                return res.status(400).json({ message: 'Already punched out today' });
+            }
         }
 
         // --- Geofencing check for Punch-Out ---
@@ -256,8 +266,12 @@ exports.punchOut = async (req, res) => {
         attendance.punchOutCoordinates = location || null;
         attendance.punchOutDistance = punchOutDistance;
         attendance.punchOutPhoto = photoUrl;
+        attendance.punchOutIsProvisional = !!req.isDevicePunch;
 
-        // Update the last shift in the array
+        // Update the last shift in the array — skipped when overriding an
+        // already-closed provisional shift (see canOverrideProvisional above):
+        // that shift's own punchIn/punchOut stays as the device recorded it,
+        // and totalWorkMs isn't double-counted.
         if (attendance.shifts && attendance.shifts.length > 0) {
             const lastShift = attendance.shifts[attendance.shifts.length - 1];
             if (!lastShift.punchOut) {
@@ -329,7 +343,18 @@ exports.lunchIn = async (req, res) => {
         }
 
         if (attendance.punchOut) {
-            return res.status(400).json({ message: 'Already punched out for today' });
+            // A device-set punchOut is provisional — it may just be the
+            // employee leaving for lunch. An explicit "Start Lunch" tap in
+            // the app confirms exactly that: clear it and record lunch
+            // normally instead of rejecting.
+            if (!attendance.punchOutIsProvisional) {
+                return res.status(400).json({ message: 'Already punched out for today' });
+            }
+            attendance.punchOut = null;
+            attendance.punchOutLocation = null;
+            attendance.punchOutCoordinates = null;
+            attendance.punchOutPhoto = null;
+            attendance.punchOutIsProvisional = false;
         }
 
         // --- Geofencing check for Lunch-In ---
@@ -385,7 +410,25 @@ exports.lunchOut = async (req, res) => {
         }
 
         if (attendance.punchOut) {
-            return res.status(400).json({ message: 'Already punched out for today' });
+            // Same provisional-override as lunchIn — additionally backfill
+            // lunchInTime from the device's own exit time when it was never
+            // explicitly set (the employee went straight from a device
+            // "out" tap to tapping "End Lunch Break" without ever tapping
+            // "Start Lunch" in the app).
+            if (!attendance.punchOutIsProvisional) {
+                return res.status(400).json({ message: 'Already punched out for today' });
+            }
+            if (!attendance.lunchInTime) {
+                attendance.lunchInTime = attendance.punchOut;
+                attendance.lunchInLocation = attendance.punchOutLocation;
+                attendance.lunchInCoordinates = attendance.punchOutCoordinates;
+                attendance.lunchInDistance = attendance.punchOutDistance;
+            }
+            attendance.punchOut = null;
+            attendance.punchOutLocation = null;
+            attendance.punchOutCoordinates = null;
+            attendance.punchOutPhoto = null;
+            attendance.punchOutIsProvisional = false;
         }
 
         if (!attendance.lunchInTime) {
@@ -501,6 +544,7 @@ exports.markAbsent = async (req, res) => {
         attendance.status = 'absent';
         attendance.punchIn = null;
         attendance.punchOut = null;
+        attendance.punchOutIsProvisional = false;
         attendance.lunchInTime = null;
         attendance.lunchOutTime = null;
         attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Marked absent by admin';
@@ -640,7 +684,7 @@ exports.getEmployeeHistory = async (req, res) => {
 
         const attendanceMap = new Map();
         history.forEach(rec => {
-            attendanceMap.set(toLocalDateKey(rec.date), rec);
+            attendanceMap.set(istDateKey(rec.date), rec);
         });
 
         const festivalMap = new Map();

@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const mongoose = require('mongoose');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
+const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 
 /**
  * Normalise a Biometric Device ID (the PIN an employee is enrolled under on a
@@ -196,15 +197,13 @@ exports.getProfile = async (req, res) => {
         const user = await User.findById(req.userId).populate('shiftId shiftIds branchId branchIds departmentId');
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
+        const todayStart = istStartOfDay();
+        const todayEndExclusive = istEndOfDay();
 
         const [todayAttendance, recentAttendance, upcomingHolidays, settings] = await Promise.all([
             Attendance.findOne({
                 employeeId: user._id,
-                date: { $gte: today, $lt: tomorrow }
+                date: { $gte: todayStart, $lte: todayEndExclusive }
             }).sort({ date: -1 }),
             Attendance.find({ employeeId: user._id })
                 .sort({ date: -1 })

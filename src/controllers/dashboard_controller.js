@@ -4,12 +4,13 @@ const Salary = require('../models/Salary');
 const Expense = require('../models/Expense');
 const Ticket = require('../models/Ticket');
 const { computeSalary } = require('./salary_controller');
+const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 
 exports.getSummary = async (req, res) => {
     try {
         const adminId = req.adminId;
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
         const now = new Date();
         const currentMonth = now.getMonth() + 1;
         const currentYear = now.getFullYear();
@@ -67,8 +68,7 @@ exports.getEmployeeDashboard = async (req, res) => {
 
         const startDate = new Date(year, month - 1, 1);
         const endDate = new Date(year, month, 0, 23, 59, 59);
-        const todayStr = new Date().toISOString().split('T')[0];
-        const today = new Date(todayStr);
+        const today = istStartOfDay();
 
         // 1. Fetch Data in Parallel
         const [todayAttendance, monthlyAttendance, salary, user] = await Promise.all([

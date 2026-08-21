@@ -48,6 +48,13 @@ const AttendanceSchema = new mongoose.Schema({
         punchIn: { type: Date },
         punchOut: { type: Date }
     }],
+    // True when the current `punchOut` was set by a device (Lens/biometric)
+    // tap, not an explicit app punch-out. Devices only ever send a generic
+    // in/out toggle, so a device-set punchOut may just be the employee
+    // leaving for lunch, not the real end of day — cleared (false) whenever
+    // the app itself sets punchOut, since that's always an unambiguous,
+    // final signal.
+    punchOutIsProvisional: { type: Boolean, default: false },
     totalWorkMs: { type: Number, default: 0 },
     remarks: { type: String, default: null }
 }, { timestamps: true });

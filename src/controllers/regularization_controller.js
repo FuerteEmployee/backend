@@ -4,7 +4,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Settings = require('../models/Settings');
 const { calculateAndSaveSalary } = require('./salary_controller');
-const { isLatePunchIn, determineHalfDayStatus } = require('../utils/attendance_helpers');
+const { isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 
 exports.getRegularizations = async (req, res) => {
     try {
@@ -40,8 +40,7 @@ exports.submitRegularization = async (req, res) => {
             return res.status(400).json({ message: 'Reason is required' });
         }
 
-        const day = new Date(req.body.date);
-        day.setHours(0, 0, 0, 0);
+        const day = istStartOfDay(new Date(req.body.date));
 
         const regularization = await Regularization.create({
             adminId: req.adminId,
@@ -79,16 +78,23 @@ exports.approveRegularization = async (req, res) => {
             Settings.findOne({ adminId: req.adminId }),
         ]);
 
+        // Match by same-day range, not exact equality: regularization.date may
+        // have been persisted by pre-IST-fix code (local/UTC midnight) while
+        // the real Attendance record is bucketed at IST midnight — an exact
+        // match would miss it and create a duplicate record for the day.
+        const regDayStart = istStartOfDay(regularization.date);
+        const regDayEnd = istEndOfDay(regularization.date);
+
         let attendance = await Attendance.findOne({
             adminId: req.adminId,
             employeeId: regularization.employeeId,
-            date: regularization.date,
+            date: { $gte: regDayStart, $lte: regDayEnd },
         });
         if (!attendance) {
             attendance = new Attendance({
                 adminId: req.adminId,
                 employeeId: regularization.employeeId,
-                date: regularization.date,
+                date: regDayStart,
             });
         }
 

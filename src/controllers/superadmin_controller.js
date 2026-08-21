@@ -13,6 +13,7 @@ const Expense = require('../models/Expense');
 const mongoose = require('mongoose');
 const { encrypt: encryptSecret, decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
+const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 
 // ─── OVERVIEW / DASHBOARD ────────────────────────────────────────────────────
 
@@ -114,8 +115,8 @@ exports.getOverview = async (req, res) => {
         }
 
         // ─── Product-level KPIs (cross-tenant) ────────────────────────────
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const [
             totalEmployees,
@@ -244,8 +245,8 @@ exports.getTenant = async (req, res) => {
         }
 
         // Today's date range for attendance
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
 
         const [
             employeeCount,
@@ -809,8 +810,8 @@ exports.getSystemAnalytics = async (req, res) => {
         });
 
         // ── Cross-tenant usage counters ──────────────────────────────────
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayStart = istStartOfDay();
+        const todayEnd = istEndOfDay();
         const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
         const [

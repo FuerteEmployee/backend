@@ -12,7 +12,7 @@
 // applied by the caller (salary_controller.computeSalary).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { isWeeklyOff, toLocalDateKey } = require('./attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, istDateKey } = require('./attendance_helpers');
 
 const BUCKETS = ['present', 'wfh', 'halfDay', 'paidLeave', 'weeklyOff', 'holiday', 'absent', 'unpaidLeave'];
 
@@ -261,7 +261,7 @@ function runEngine({ emp, settings, year, month, attendanceRecords, festivals, l
 
     const festivalSet = buildFestivalSet(festivals);
     const attendanceByKey = new Map();
-    for (const rec of attendanceRecords || []) attendanceByKey.set(toLocalDateKey(rec.date), rec);
+    for (const rec of attendanceRecords || []) attendanceByKey.set(istDateKey(rec.date), rec);
     const leaveByKey = buildLeaveMap(leaves, leaveTypesById, year, month);
     const workDays = settings && settings.attendance ? settings.attendance.workDays : undefined;
 

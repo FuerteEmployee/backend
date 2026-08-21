@@ -9,6 +9,7 @@ const {
     recordUnresolved,
 } = require('../utils/device_registry');
 const punchSequence = require('../utils/punch_sequence');
+const { istStartOfDay } = require('../utils/attendance_helpers');
 
 // Maps a resolved action name to the handler that records it.
 const HANDLERS = {
@@ -35,7 +36,7 @@ const HANDLERS = {
 //
 // Returns { action, reason }. A null action means "don't record this tap".
 async function resolveAction(adminId, employeeId, seqConfig) {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const today = istStartOfDay();
     const existing = await Attendance.findOne({ adminId, employeeId, date: today })
         .select('punchIn punchOut lunchInTime lunchOutTime');
 

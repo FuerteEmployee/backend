@@ -64,6 +64,35 @@ const istEndOfDay = (date = new Date()) => {
 };
 
 /**
+ * 'YYYY-MM-DD' key for the IST calendar day a real timestamp falls on —
+ * e.g. an Attendance record's `date`/`punchIn`, which is stored as an IST
+ * midnight instant. Unlike `toLocalDateKey` (which reads Y/M/D via the
+ * server process's own timezone), this always resolves to the IST day
+ * regardless of server locale. Use this — not `toLocalDateKey` — whenever
+ * you're deriving a day key from an actual stored timestamp; `toLocalDateKey`
+ * remains correct for pure calendar-iteration placeholders (`new Date(y,m,d)`)
+ * that were never meant to represent a specific real-world instant.
+ */
+const istDateKey = (date = new Date()) => {
+  const shifted = new Date(new Date(date).getTime() + IST_OFFSET_MS);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+/**
+ * A plain JS Date anchored at local noon for the IST calendar day a real
+ * timestamp falls on — safe to feed into `.getDate()`/`.toLocaleDateString()`
+ * for weekday/day-of-month lookups without re-hitting the same midnight-
+ * boundary timezone bug `istDateKey` exists to avoid.
+ */
+const istCalendarDate = (date = new Date()) => {
+  const [y, m, d] = istDateKey(date).split('-').map(Number);
+  return new Date(y, m - 1, d, 12);
+};
+
+/**
  * Was a punch-in late relative to the employee's shift + grace period?
  * Parameterized on punchInDate (not `now`) so it can also validate a
  * requested/corrected time during regularization approval.
@@ -187,4 +216,4 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   };
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay };
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate };

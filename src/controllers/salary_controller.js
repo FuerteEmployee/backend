@@ -7,7 +7,7 @@ const Festival = require('../models/Festival');
 const Settings = require('../models/Settings');
 const Leave = require('../models/Leave');
 const LeaveType = require('../models/LeaveType');
-const { isWeeklyOff } = require('../utils/attendance_helpers');
+const { isWeeklyOff, istDateKey, istCalendarDate } = require('../utils/attendance_helpers');
 const { runEngine, applyRounding, validateSalary } = require('../utils/payroll_engine');
 
 // Pure computation — returns the salary figures WITHOUT persisting. Used both by
@@ -173,8 +173,7 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
 
     const attendanceMap = new Map();
     attendanceRecords.forEach(rec => {
-        const dateStr = rec.date.toISOString().split('T')[0];
-        attendanceMap.set(dateStr, rec);
+        attendanceMap.set(istDateKey(rec.date), rec);
     });
 
     let holidayWorkDays = 0;
@@ -248,10 +247,11 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
 
     const normalWorkingAttendance = attendanceRecords.reduce((sum, rec) => {
         if (joinDate && rec.date < joinDate) return sum;
-        const dateStr = rec.date.toISOString().split('T')[0];
+        const dateStr = istDateKey(rec.date);
         if (festivalDates.has(dateStr)) return sum;
-        const dayName = rec.date.toLocaleDateString('en-US', { weekday: 'long' });
-        const isOff = isWeeklyOff(dayName, rec.date.getDate(), weeklyHolidays, settings?.attendance?.workDays);
+        const recDay = istCalendarDate(rec.date);
+        const dayName = recDay.toLocaleDateString('en-US', { weekday: 'long' });
+        const isOff = isWeeklyOff(dayName, recDay.getDate(), weeklyHolidays, settings?.attendance?.workDays);
         if (isOff) return sum;
         if (rec.status === 'present' || rec.status === 'late' || rec.status === 'wfh') return sum + 1;
         if (rec.status === 'half-day') return sum + 0.5;
