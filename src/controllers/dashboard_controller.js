@@ -10,15 +10,16 @@ const { istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// 7 calendar days (oldest first) ending at `endDate`, of present-vs-absent
-// counts, for the dashboard's "Attendance Performance" trend chart.
-// `activeEmployees` is CURRENT headcount used as a stand-in for each day's —
-// historical daily headcount isn't tracked, and headcount rarely swings much
-// day to day. When viewing a past month, `endDate` anchors the window to the
-// end of that month instead of today.
-async function getAttendanceTrend(adminId, activeEmployees, endDate) {
+// `dayCount` calendar days (oldest first) ending at `endDate`, of
+// present-vs-absent counts, for the dashboard's "Attendance Performance"
+// trend chart. `activeEmployees` is CURRENT headcount used as a stand-in for
+// each day's — historical daily headcount isn't tracked, and headcount
+// rarely swings much day to day. When viewing a past month (or a custom
+// range), `endDate` anchors the window to the end of that period instead of
+// today.
+async function getAttendanceTrend(adminId, activeEmployees, endDate, dayCount = 7) {
     const days = [];
-    for (let i = 6; i >= 0; i--) {
+    for (let i = dayCount - 1; i >= 0; i--) {
         const d = new Date(endDate);
         d.setDate(d.getDate() - i);
         days.push(d);
@@ -48,10 +49,12 @@ async function getAttendanceTrend(adminId, activeEmployees, endDate) {
     });
 }
 
-// Current-month payroll total per department, for the "Budget Allocation" pie.
-async function getSalaryByDepartment(adminId, month, year) {
+// Payroll total per department, for the "Budget Allocation" pie.
+// `monthYearPairs` is the set of {month, year} pairs to include — a single
+// pair for the normal month view, or every month a custom date range touches.
+async function getSalaryByDepartment(adminId, monthYearPairs) {
     const rows = await Salary.aggregate([
-        { $match: { adminId: new mongoose.Types.ObjectId(adminId), month, year } },
+        { $match: { adminId: new mongoose.Types.ObjectId(adminId), $or: monthYearPairs } },
         { $lookup: { from: 'users', localField: 'employeeId', foreignField: '_id', as: 'emp' } },
         { $unwind: '$emp' },
         { $lookup: { from: 'departments', localField: 'emp.departmentId', foreignField: '_id', as: 'dept' } },
@@ -68,6 +71,20 @@ async function getSalaryByDepartment(adminId, month, year) {
     return rows;
 }
 
+// Every distinct {month, year} pair a [start, end] date range touches —
+// payroll (Salary) records are keyed by calendar month, not by day, so a
+// custom range spanning multiple months has to pull each of those months.
+function monthYearPairsInRange(start, end) {
+    const pairs = [];
+    const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    const last = new Date(end.getFullYear(), end.getMonth(), 1);
+    while (cursor <= last) {
+        pairs.push({ month: cursor.getMonth() + 1, year: cursor.getFullYear() });
+        cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return pairs;
+}
+
 // Current active-employee headcount per department, for "Team Strength".
 async function getDepartmentHeadcount(adminId) {
     const rows = await User.aggregate([
@@ -81,24 +98,56 @@ async function getDepartmentHeadcount(adminId) {
     return rows;
 }
 
+// Chart stays readable even if someone picks a very wide custom range.
+const MAX_TREND_DAYS = 31;
+
 exports.getSummary = async (req, res) => {
     try {
         const adminId = req.adminId;
         const now = new Date();
-        const requestedMonth = parseInt(req.query.month, 10);
-        const requestedYear = parseInt(req.query.year, 10);
-        const month = requestedMonth >= 1 && requestedMonth <= 12 ? requestedMonth : now.getMonth() + 1;
-        const year = requestedYear >= 2000 ? requestedYear : now.getFullYear();
-        const isCurrentMonth = month === now.getMonth() + 1 && year === now.getFullYear();
 
-        const monthStart = new Date(year, month - 1, 1);
-        const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
-        // For the current month, the day-level cards mean "today"; for a past
-        // month there's no "today" to speak of, so they fall back to counting
-        // whatever was actually recorded across that whole month.
-        const dayWindowStart = isCurrentMonth ? istStartOfDay() : monthStart;
-        const dayWindowEnd = isCurrentMonth ? istEndOfDay() : monthEnd;
-        const trendEndDate = isCurrentMonth ? now : monthEnd;
+        // A custom date range (explicit startDate/endDate) takes over from the
+        // month picker entirely — every window below anchors to it instead.
+        const parsedStart = req.query.startDate ? new Date(req.query.startDate) : null;
+        const parsedEnd = req.query.endDate ? new Date(req.query.endDate) : null;
+        const isCustomRange = !!(parsedStart && parsedEnd && !isNaN(parsedStart) && !isNaN(parsedEnd) && parsedStart <= parsedEnd);
+
+        let month, year, isCurrentMonth, monthStart, monthEnd, dayWindowStart, dayWindowEnd, trendEndDate, trendDayCount;
+
+        if (isCustomRange) {
+            dayWindowStart = istStartOfDay(parsedStart);
+            dayWindowEnd = istEndOfDay(parsedEnd);
+            monthStart = dayWindowStart;
+            monthEnd = dayWindowEnd;
+            trendEndDate = dayWindowEnd;
+            isCurrentMonth = false; // no single "today" in a range — behaves like a past-month view
+            // Still needed for the "Budget Allocation" pie/label — payroll is
+            // month-keyed, so this becomes "every month the range touches".
+            month = dayWindowEnd.getMonth() + 1;
+            year = dayWindowEnd.getFullYear();
+            const spanDays = Math.floor((dayWindowEnd - dayWindowStart) / (24 * 60 * 60 * 1000)) + 1;
+            trendDayCount = Math.max(1, Math.min(MAX_TREND_DAYS, spanDays));
+        } else {
+            const requestedMonth = parseInt(req.query.month, 10);
+            const requestedYear = parseInt(req.query.year, 10);
+            month = requestedMonth >= 1 && requestedMonth <= 12 ? requestedMonth : now.getMonth() + 1;
+            year = requestedYear >= 2000 ? requestedYear : now.getFullYear();
+            isCurrentMonth = month === now.getMonth() + 1 && year === now.getFullYear();
+
+            monthStart = new Date(year, month - 1, 1);
+            monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+            // For the current month, the day-level cards mean "today"; for a past
+            // month there's no "today" to speak of, so they fall back to counting
+            // whatever was actually recorded across that whole month.
+            dayWindowStart = isCurrentMonth ? istStartOfDay() : monthStart;
+            dayWindowEnd = isCurrentMonth ? istEndOfDay() : monthEnd;
+            trendEndDate = isCurrentMonth ? now : monthEnd;
+            trendDayCount = 7;
+        }
+
+        const salaryMonthYearPairs = isCustomRange
+            ? monthYearPairsInRange(dayWindowStart, dayWindowEnd)
+            : [{ month, year }];
 
         const [
             totalEmployees,
@@ -119,7 +168,7 @@ exports.getSummary = async (req, res) => {
             Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'late' }),
             Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'half-day' }),
             Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'absent' }),
-            Salary.find({ adminId, month, year }),
+            Salary.find({ adminId, $or: salaryMonthYearPairs }),
             Expense.find({ adminId, date: { $gte: monthStart, $lte: monthEnd } }),
             User.find({ adminId, role: 'employee' }).sort({ createdAt: -1 }).limit(5).populate('departmentId'),
             Ticket.find({ adminId, status: 'pending' }).sort({ createdAt: -1 }).limit(4).populate('employeeId'),
@@ -130,8 +179,8 @@ exports.getSummary = async (req, res) => {
         const totalExpenseAmount = monthlyExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
         const [attendanceTrend, salaryDistribution, departmentHeadcount] = await Promise.all([
-            getAttendanceTrend(adminId, activeEmployees, trendEndDate),
-            getSalaryByDepartment(adminId, month, year),
+            getAttendanceTrend(adminId, activeEmployees, trendEndDate, trendDayCount),
+            getSalaryByDepartment(adminId, salaryMonthYearPairs),
             getDepartmentHeadcount(adminId),
         ]);
 
@@ -139,6 +188,8 @@ exports.getSummary = async (req, res) => {
             month,
             year,
             isCurrentMonth,
+            isCustomRange,
+            ...(isCustomRange ? { startDate: dayWindowStart.toISOString().slice(0, 10), endDate: dayWindowEnd.toISOString().slice(0, 10) } : {}),
             stats: {
                 totalEmployees,
                 activeEmployees,
