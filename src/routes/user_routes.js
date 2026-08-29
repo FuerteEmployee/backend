@@ -53,9 +53,4 @@ router.post('/admin-users', adminOnly, createAdminUser);
 router.put('/admin-users/:id', adminOnly, updateAdminUser);
 router.delete('/admin-users/:id', adminOnly, deleteAdminUser);
 
-// Base CRUD aliases
-router.post('/', createUser); // Generic create user
-router.put('/:id', updateUser); // Generic update user
-router.delete('/:id', deleteUser); // Generic delete user
-
 module.exports = router;

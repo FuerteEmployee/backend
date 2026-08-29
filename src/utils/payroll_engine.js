@@ -160,7 +160,7 @@ function classifyMonth({ emp, year, month, asOfDate, attendanceByKey, festivalSe
         const dateKey = toLocalDateKey(date);
         const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
         const isHoliday = festivalSet.has(dateKey);
-        const isOff = isWeeklyOff(dayName, d, weeklyHolidays, workDays);
+        const isOff = isWeeklyOff(dayName, d, weeklyHolidays, workDays, emp?.shiftId?.workDays);
         const isWorkingDay = !isHoliday && !isOff;
         if (isWorkingDay) workingDaysInMonth++;
 
@@ -220,12 +220,23 @@ function applySandwich(days) {
 // Tally bucket counts and the weighted payable-days for the window.
 function computeTotals(days, config) {
     const counts = Object.fromEntries(BUCKETS.map((b) => [b, 0]));
-    let payableDays = 0;
-    let holidayWorkedDays = 0;
-
     for (const day of days) {
         if (!day.inWindow) continue;
         counts[day.bucket] = (counts[day.bucket] || 0) + 1;
+    }
+
+    // The sandwich rule already unpays a weekly-off/holiday flanked by absence
+    // on both sides, but at a window edge with no neighbour on one side it
+    // can't. If there's zero actual work (present/wfh/half-day) anywhere in
+    // the window, there's no work pattern here to be compensating rest days
+    // for — don't credit weekly-off/holiday pay at all.
+    const noWorkAtAll = (counts.present + counts.wfh + counts.halfDay) === 0;
+
+    let payableDays = 0;
+    let holidayWorkedDays = 0;
+    for (const day of days) {
+        if (!day.inWindow) continue;
+        if (noWorkAtAll && (day.bucket === 'weeklyOff' || day.bucket === 'holiday')) continue;
 
         let w;
         if (day.bucket === 'paidLeave' && day.leave && day.leave.payWeight != null) {

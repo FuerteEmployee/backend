@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getExpenses, addExpense, updateExpense, deleteExpense, approveExpense, rejectExpense } = require('../controllers/expense_controller');
+const { getExpenses, addExpense, updateExpense, deleteExpense, approveExpense, rejectExpense, approveExpenseGroup, rejectExpenseGroup } = require('../controllers/expense_controller');
 const { protect, checkPermission } = require('../middleware/auth.middleware');
 const { checkModuleAccess } = require('../middleware/subscription.middleware');
 const { uploadDocument } = require('../config/cloudinary');
@@ -14,6 +14,8 @@ router.post('/', checkPermission('expenses', 'create'), uploadDocument.single('d
 router.put('/:id', checkPermission('expenses', 'edit'), updateExpense); // Update existing expense claim details
 router.patch('/:id/approve', checkPermission('expenses', 'edit'), approveExpense); // One-click approve a pending expense claim
 router.patch('/:id/reject', checkPermission('expenses', 'edit'), rejectExpense); // One-click reject a pending expense claim
+router.patch('/group/:splitGroupId/approve', checkPermission('expenses', 'edit'), approveExpenseGroup); // Approve every share of a split expense together
+router.patch('/group/:splitGroupId/reject', checkPermission('expenses', 'edit'), rejectExpenseGroup); // Reject every share of a split expense together
 router.delete('/:id', checkPermission('expenses', 'delete'), deleteExpense); // Remove an expense record
 
 module.exports = router;

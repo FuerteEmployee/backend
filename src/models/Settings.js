@@ -41,7 +41,7 @@ const SettingsSchema = new mongoose.Schema({
     // Attendance Configuration
     attendance: {
         defaultShiftId: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift' },
-        requireLocation: { type: Boolean, default: false },
+        requireLocation: { type: Boolean, default: true },
         officeRadius: { type: Number, default: 3000 },
         remotePunch: { type: Boolean, default: true },
         workDays: { type: [String], default: ['M', 'T', 'W', 'Th', 'F'] },
@@ -56,6 +56,58 @@ const SettingsSchema = new mongoose.Schema({
         // Minutes allowed for lunch before the Attendance Detail view flags an
         // "overrun" — mirrors a field attendance-config.tsx already sends.
         maxLunch: { type: Number, default: 90 },
+
+        // ── attendance-config.tsx fields below ───────────────────────────────
+        // These were previously sent by the UI but absent from this schema, so
+        // Mongoose's default strict mode silently dropped every one of them on
+        // every save — the admin would set them, save, reload, and see them
+        // revert. Declared here purely so they persist; see salary_controller.js
+        // (overtime) and attendance_helpers.js (rounding) for the ones that also
+        // feed real calculations.
+        punchIn: { type: String, default: '09:00' },
+        punchOut: { type: String, default: '18:00' },
+        earliestIn: { type: String, default: '07:30' },
+        latestOut: { type: String, default: '22:00' },
+        autoPunchOut: { type: Boolean, default: true },
+        lunchIn: { type: String, default: '13:00' },
+        lunchOut: { type: String, default: '14:00' },
+        minLunch: { type: Number, default: 30 },
+        earlyGrace: { type: Number, default: 5 },
+        lunchGrace: { type: Number, default: 5 },
+        // Daily hours beyond which extra worked time counts as overtime, the
+        // weekly OT cap (hours), and the pay multiplier applied to OT hours —
+        // consumed by salary_controller.js's overtime earnings line.
+        otThreshold: { type: Number, default: 9 },
+        weeklyOT: { type: Number, default: 45 },
+        otMultiplier: { type: Number, default: 1.5 },
+        // Punch-time rounding applied before late/half-day/payroll math runs
+        // (see attendance_helpers.js's roundPunchTime).
+        roundingInterval: { type: Number, default: 0 }, // minutes; 0 = off
+        roundingDirection: { type: String, enum: ['nearest', 'up', 'down'], default: 'nearest' },
+        roundingAppliedTo: { type: [String], default: ['Punch In', 'Punch Out'] },
+        // Reminder scheduling preferences — persisted for forward-compatibility,
+        // but no reminder-delivery job exists yet (see backend/src/jobs), so
+        // these currently have no effect beyond being saved/reloaded correctly.
+        notifications: {
+            punchInReminder: { type: Boolean, default: true },
+            punchInReminderMins: { type: Number, default: 15 },
+            lunchReminder: { type: Boolean, default: true },
+            lunchReminderMins: { type: Number, default: 5 },
+            lunchReturnReminder: { type: Boolean, default: true },
+            lunchReturnReminderMins: { type: Number, default: 10 },
+            punchOutReminder: { type: Boolean, default: true },
+            punchOutReminderMins: { type: Number, default: 10 },
+            missedPunchAlert: { type: Boolean, default: true },
+            channels: { type: [String], default: ['Push', 'SMS'] },
+        },
+        // Display/locale preferences — persisted, but nothing server-side reads
+        // these yet (formatting is currently client-only wherever it happens).
+        display: {
+            timeFormat: { type: String, default: '24h' },
+            timezone: { type: String, default: 'UTC+05:30' },
+            weekStart: { type: String, default: 'Monday' },
+            dateFormat: { type: String, default: 'YYYY-MM-DD' },
+        },
 
         // ── What each successive punch of the day MEANS ──────────────────────
         // A biometric terminal reports only "somebody was recognised"; it can't

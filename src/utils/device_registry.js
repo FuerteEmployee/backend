@@ -14,6 +14,38 @@ function normalizeSerial(sn) {
     return String(sn || '').trim().toUpperCase();
 }
 
+// De-dupes a resent ATTLOG line. iClock-protocol terminals routinely re-push
+// their buffered log on reconnect/ack-timeout — without this, the same tap
+// gets treated as a brand-new punch and advances the in/out toggle (or
+// sequence step) one extra time, corrupting attendance/payroll. Keyed by
+// (serial, pin, raw device timestamp) since that triple identifies one
+// physical tap. In-memory + TTL only: it protects against the realistic
+// resend window (seconds to a few minutes within the same server process),
+// not a dedupe across a server restart — a persisted table would be needed
+// for that, which is more than this failure mode calls for.
+const PROCESSED_LOG_TTL_MS = 10 * 60 * 1000;
+const processedLogs = new Map(); // "serial|pin|deviceTime" -> seenAt
+
+function processedLogKey(serialNumber, pin, deviceTime) {
+    return `${normalizeSerial(serialNumber)}|${pin}|${deviceTime}`;
+}
+
+function isDuplicateLog(serialNumber, pin, deviceTime) {
+    const key = processedLogKey(serialNumber, pin, deviceTime);
+    const seenAt = processedLogs.get(key);
+    if (seenAt !== undefined && Date.now() - seenAt < PROCESSED_LOG_TTL_MS) return true;
+    processedLogs.set(key, Date.now());
+    // Opportunistic cleanup so this map doesn't grow unbounded on a long-lived
+    // process — cheap relative to how rarely a push batch arrives.
+    if (processedLogs.size > 5000) {
+        const cutoff = Date.now() - PROCESSED_LOG_TTL_MS;
+        for (const [k, t] of processedLogs) {
+            if (t < cutoff) processedLogs.delete(k);
+        }
+    }
+    return false;
+}
+
 function invalidateDeviceCache(serialNumber) {
     if (serialNumber) cache.delete(normalizeSerial(serialNumber));
     else cache.clear();
@@ -155,4 +187,5 @@ module.exports = {
     markSeen,
     markPunch,
     recordUnresolved,
+    isDuplicateLog,
 };

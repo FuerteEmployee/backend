@@ -8,7 +8,7 @@ const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
-const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, applyPunchRounding } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -78,12 +78,17 @@ exports.punchIn = async (req, res) => {
         const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
 
+        // Rounded per settings.attendance.roundingInterval/Direction (only if
+        // 'Punch In' is in roundingAppliedTo) — feeds status/half-day checks and
+        // is what actually gets stored, so payroll and the late check agree.
+        const punchInTime = applyPunchRounding(now, 'Punch In', settings);
+
         // Camera-detected punches (BOTLens) reflect physical reality — the
         // person genuinely left and came back — so they always get to
         // re-punch regardless of the tenant's app-facing policy toggle.
         const allowMultiple = req.isDevicePunch || settings?.attendance?.allowMultiplePunches || false;
 
-        if (attendance) {
+        if (attendance && attendance.punchIn) {
             if (!allowMultiple) {
                 return res.status(400).json({ message: 'Already punched in today' });
             }
@@ -106,7 +111,7 @@ exports.punchIn = async (req, res) => {
             attendance.punchOutIsProvisional = false;
 
             attendance.shifts = attendance.shifts || [];
-            attendance.shifts.push({ punchIn: now });
+            attendance.shifts.push({ punchIn: punchInTime });
             
             if (!attendance.remarks?.includes('Multiple shifts')) {
                 attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Multiple shifts';
@@ -136,10 +141,10 @@ exports.punchIn = async (req, res) => {
         const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
         let punchInDistance = null;
         if (!isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
-            const distance = nearestBranchDistance(location.lat, location.lng, branches);
+            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, settings?.attendance?.officeRadius || 3000);
             if (Number.isFinite(distance)) punchInDistance = Math.round(distance);
 
-            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
             if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({
                     message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)`,
@@ -153,14 +158,14 @@ exports.punchIn = async (req, res) => {
         // 4. Determine Status (Late Check & Shift-specific Half Day check)
         let status = 'present';
         if (user.shiftId && !isWFH) {
-            if (isLatePunchIn(now, user.shiftId, settings)) {
+            if (isLatePunchIn(punchInTime, user.shiftId, settings)) {
                 status = 'late';
             }
             if (user.shiftId.halfDayLatePunchInMin) {
                 const [sHour, sMinute] = user.shiftId.startTime.split(':').map(Number);
-                const halfDayPunchInCutoff = new Date(now);
+                const halfDayPunchInCutoff = new Date(punchInTime);
                 halfDayPunchInCutoff.setHours(sHour, sMinute + user.shiftId.halfDayLatePunchInMin, 0, 0);
-                if (now > halfDayPunchInCutoff) {
+                if (punchInTime > halfDayPunchInCutoff) {
                     status = 'half-day';
                 }
             }
@@ -172,11 +177,15 @@ exports.punchIn = async (req, res) => {
         // WFH is a first-class status; wasLate will be set on punch-out so the
         // flag survives the status normalisation (late → present/half-day).
         const finalStatus = isWFH ? 'wfh' : status;
-        attendance = new Attendance({
-            adminId: req.adminId,
-            employeeId,
-            date: today,
-            punchIn: now,
+        if (!attendance) {
+            attendance = new Attendance({
+                adminId: req.adminId,
+                employeeId,
+                date: today,
+            });
+        }
+        attendance.set({
+            punchIn: punchInTime,
             punchInLocation: address || "Location provided by user",
             punchInCoordinates: location || null,
             punchInDistance,
@@ -188,7 +197,7 @@ exports.punchIn = async (req, res) => {
             punchOut: null,
             lunchInTime: null,
             lunchOutTime: null,
-            shifts: [{ punchIn: now }],
+            shifts: [{ punchIn: punchInTime }],
             totalWorkMs: 0
         });
 
@@ -245,13 +254,18 @@ exports.punchOut = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
+        // Rounded per settings.attendance.roundingInterval/Direction (only if
+        // 'Punch Out' is in roundingAppliedTo) — this is what actually gets
+        // stored and fed into worked-hours/half-day/payroll math.
+        const punchOutTime = applyPunchRounding(now, 'Punch Out', settings);
+
         const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
         let punchOutDistance = null;
         if (!attendance.isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
-            const distance = nearestBranchDistance(location.lat, location.lng, branches);
+            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, settings?.attendance?.officeRadius || 3000);
             if (Number.isFinite(distance)) punchOutDistance = Math.round(distance);
 
-            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
             if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
@@ -261,7 +275,7 @@ exports.punchOut = async (req, res) => {
 
         const photoUrl = photo ? await uploadToCloudinary(photo) : null;
 
-        attendance.punchOut = now;
+        attendance.punchOut = punchOutTime;
         attendance.punchOutLocation = address || "Location provided by user";
         attendance.punchOutCoordinates = location || null;
         attendance.punchOutDistance = punchOutDistance;
@@ -275,7 +289,7 @@ exports.punchOut = async (req, res) => {
         if (attendance.shifts && attendance.shifts.length > 0) {
             const lastShift = attendance.shifts[attendance.shifts.length - 1];
             if (!lastShift.punchOut) {
-                lastShift.punchOut = now;
+                lastShift.punchOut = punchOutTime;
                 const shiftMs = lastShift.punchOut - lastShift.punchIn;
                 attendance.totalWorkMs = (attendance.totalWorkMs || 0) + shiftMs;
             }
@@ -365,10 +379,10 @@ exports.lunchIn = async (req, res) => {
         const lunchInBranches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
         let lunchInDistance = null;
         if (attendance.remarks !== 'Work From Home' && lunchInBranches.length > 0 && location?.lat != null && location?.lng != null) {
-            const distance = nearestBranchDistance(location.lat, location.lng, lunchInBranches);
+            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, lunchInBranches, settings?.attendance?.officeRadius || 3000);
             if (Number.isFinite(distance)) lunchInDistance = Math.round(distance);
 
-            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
             if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
@@ -380,7 +394,7 @@ exports.lunchIn = async (req, res) => {
             return res.status(400).json({ message: 'Lunch already completed for today' });
         }
 
-        attendance.lunchInTime = new Date();
+        attendance.lunchInTime = applyPunchRounding(new Date(), 'Lunch In', settings);
         attendance.lunchInLocation = address || "Location provided by user";
         attendance.lunchInCoordinates = location || null;
         attendance.lunchInDistance = lunchInDistance;
@@ -447,10 +461,10 @@ exports.lunchOut = async (req, res) => {
         const lunchOutBranches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
         let lunchOutDistance = null;
         if (attendance.remarks !== 'Work From Home' && lunchOutBranches.length > 0 && location?.lat != null && location?.lng != null) {
-            const distance = nearestBranchDistance(location.lat, location.lng, lunchOutBranches);
+            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, lunchOutBranches, settings?.attendance?.officeRadius || 3000);
             if (Number.isFinite(distance)) lunchOutDistance = Math.round(distance);
 
-            const maxRadius = settings?.attendance?.officeRadius || 3000;
+            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
             if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
@@ -458,7 +472,7 @@ exports.lunchOut = async (req, res) => {
             return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
-        attendance.lunchOutTime = new Date();
+        attendance.lunchOutTime = applyPunchRounding(new Date(), 'Lunch Out', settings);
         attendance.lunchOutLocation = address || "Location provided by user";
         attendance.lunchOutCoordinates = location || null;
         attendance.lunchOutDistance = lunchOutDistance;
@@ -600,7 +614,12 @@ exports.getStats = async (req, res) => {
             Regularization.countDocuments({ adminId: req.adminId, status: 'pending' }),
         ]);
 
-        const presentToday = todayRecords.filter(r => ['present', 'late', 'wfh', 'half-day'].includes(r.status)).length;
+        // Half-day gets its own dedicated count (like the dashboard's "Half Day
+        // Today" card) instead of being folded into presentToday — otherwise
+        // this number silently means something different here than it does
+        // on the admin dashboard, which is confusing when the two are compared.
+        const presentToday = todayRecords.filter(r => ['present', 'late', 'wfh'].includes(r.status)).length;
+        const halfDayToday = todayRecords.filter(r => r.status === 'half-day').length;
         const lateArrivals = todayRecords.filter(r => r.status === 'late' || r.wasLate).length;
         const missingPunch = todayRecords.filter(r => r.punchIn && !r.punchOut).length;
         const absentToday = Math.max(0, activeEmployeeCount - todayRecords.length);
@@ -608,6 +627,7 @@ exports.getStats = async (req, res) => {
         res.json({
             date: dayStart.toISOString().slice(0, 10),
             presentToday,
+            halfDayToday,
             lateArrivals,
             missingPunch,
             absentToday,
@@ -670,7 +690,7 @@ exports.getEmployeeHistory = async (req, res) => {
 
         // 1. Fetch data
         const [user, settings, history, festivals] = await Promise.all([
-            User.findById(employeeId),
+            User.findById(employeeId).populate('shiftId'),
             Settings.findOne({ adminId: req.adminId }),
             Attendance.find({ adminId: req.adminId, employeeId, date: { $gte: startDate, $lte: endDate } }),
             Festival.find({
@@ -743,7 +763,7 @@ exports.getEmployeeHistory = async (req, res) => {
             } else {
                 // Determine missing day status
                 const festivalName = festivalMap.get(dateStr);
-                const dayIsOff = isWeeklyOff(dayName, d, weeklyHolidays, settings?.attendance?.workDays);
+                const dayIsOff = isWeeklyOff(dayName, d, weeklyHolidays, settings?.attendance?.workDays, user?.shiftId?.workDays);
 
                 let status = 'absent';
                 let remarks = '';

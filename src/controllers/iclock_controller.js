@@ -7,6 +7,7 @@ const {
     markSeen,
     markPunch,
     recordUnresolved,
+    isDuplicateLog,
 } = require('../utils/device_registry');
 const punchSequence = require('../utils/punch_sequence');
 const { istStartOfDay } = require('../utils/attendance_helpers');
@@ -155,6 +156,11 @@ exports.pushData = async (req, res) => {
     for (const line of lines) {
         const [pin, deviceTime] = line.split('\t');
         if (!pin || !deviceTime) continue;
+
+        if (isDuplicateLog(sn, pin, deviceTime)) {
+            console.log(`[iclock] duplicate resend ignored: SN=${sn} PIN=${pin} deviceTime=${deviceTime}`);
+            continue;
+        }
 
         try {
             // Scoped by adminId, always. This is what guarantees a punch on this

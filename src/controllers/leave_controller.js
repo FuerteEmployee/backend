@@ -1,7 +1,54 @@
 ﻿const Leave = require('../models/Leave');
 const User = require('../models/User');
+const Festival = require('../models/Festival');
+const Settings = require('../models/Settings');
 const mongoose = require('mongoose');
 const { calculateAndSaveSalary } = require('./salary_controller');
+const { isWeeklyOff, toLocalDateKey } = require('../utils/attendance_helpers');
+
+// Counts the business days between startDate/endDate inclusive — excludes the
+// employee's weekly-offs (weeklyHolidays override → shift workDays → tenant
+// default) and tenant festivals/holidays — so a leave request spanning a
+// weekend isn't charged against balance for the weekend days.
+async function countBusinessDays(adminId, employee, startDate, endDate) {
+    const startKey = toLocalDateKey(startDate);
+    const endKey = toLocalDateKey(endDate);
+    const festivals = await Festival.find({
+        adminId,
+        startDate: { $lte: endKey },
+        endDate: { $gte: startKey },
+    });
+    const festivalDates = new Set();
+    festivals.forEach(f => {
+        let cur = new Date(f.startDate);
+        const last = new Date(f.endDate || f.startDate);
+        let guard = 0;
+        while (cur <= last && guard < 400) {
+            festivalDates.add(toLocalDateKey(cur));
+            cur.setDate(cur.getDate() + 1);
+            guard++;
+        }
+    });
+
+    const settings = await Settings.findOne({ adminId }).select('attendance');
+    const weeklyHolidays = employee.weeklyHolidays || [];
+    const shiftWorkDays = employee.shiftId?.workDays;
+
+    let count = 0;
+    let cur = new Date(startDate);
+    const last = new Date(endDate);
+    let guard = 0;
+    while (cur <= last && guard < 400) {
+        const dateKey = toLocalDateKey(cur);
+        const dayName = cur.toLocaleDateString('en-US', { weekday: 'long' });
+        const isFestival = festivalDates.has(dateKey);
+        const isOff = isWeeklyOff(dayName, cur.getDate(), weeklyHolidays, settings?.attendance?.workDays, shiftWorkDays);
+        if (!isFestival && !isOff) count++;
+        cur.setDate(cur.getDate() + 1);
+        guard++;
+    }
+    return count;
+}
 
 // Fetch all leaves for the tenant (filtered by employee, status, leave type)
 exports.getLeaves = async (req, res) => {
@@ -46,12 +93,45 @@ exports.addLeave = async (req, res) => {
         if (!employeeId) {
             return res.status(400).json({ message: 'Employee ID is required' });
         }
+        if (!req.body.leaveTypeId) {
+            return res.status(400).json({ message: 'Leave type is required' });
+        }
+
+        const startDate = new Date(req.body.startDate);
+        const endDate = new Date(req.body.endDate || req.body.startDate);
+        if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate < startDate) {
+            return res.status(400).json({ message: 'Invalid date range' });
+        }
+
+        const employee = await User.findOne({ _id: employeeId, adminId: req.adminId }).populate('shiftId');
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+        // Reject overlapping requests up front rather than silently double-booking
+        // the same days across two pending/approved leave records.
+        const overlap = await Leave.findOne({
+            adminId: req.adminId,
+            employeeId,
+            status: { $in: ['pending', 'approved'] },
+            startDate: { $lte: endDate },
+            endDate: { $gte: startDate },
+        });
+        if (overlap) {
+            return res.status(400).json({ message: 'This overlaps with an existing leave request for the same period.' });
+        }
+
+        const duration = await countBusinessDays(req.adminId, employee, startDate, endDate);
+        if (duration <= 0) {
+            return res.status(400).json({ message: 'The selected date range has no working days to charge against leave — check weekends/holidays.' });
+        }
 
         const leave = await Leave.create({
-            ...req.body,
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
-            leaveTypeId: new mongoose.Types.ObjectId(req.body.leaveTypeId)
+            leaveTypeId: new mongoose.Types.ObjectId(req.body.leaveTypeId),
+            startDate,
+            endDate,
+            duration,
+            reason: req.body.reason,
         });
 
         res.status(201).json(leave);

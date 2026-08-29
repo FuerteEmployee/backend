@@ -5,23 +5,26 @@ const DAY_LABELS = {
 
 /**
  * Determines if a given day is a weekly off for an employee.
- * Logic: Priority to User's weeklyHolidays, fallback to Settings' workDays.
+ * Priority: employee's own weeklyHolidays override, then their shift's
+ * per-shift workDays (e.g. a night-shift crew working Tue-Sat), then the
+ * tenant-wide Settings.attendance.workDays default.
  */
-const isWeeklyOff = (dayName, dateDay, weeklyHolidays, globalWorkDays) => {
+const isWeeklyOff = (dayName, dateDay, weeklyHolidays, globalWorkDays, shiftWorkDays) => {
   const weekNum = Math.ceil(dateDay / 7);
-  
+
   if (weeklyHolidays && weeklyHolidays.length > 0) {
-    return weeklyHolidays.some(h => 
+    return weeklyHolidays.some(h =>
       h.day === dayName && (h.weeks.length === 0 || h.weeks.includes(weekNum))
     );
   }
-  
-  // Fallback to global settings
-  const activeWorkDays = globalWorkDays || ['M', 'T', 'W', 'Th', 'F'];
+
+  const activeWorkDays = (shiftWorkDays && shiftWorkDays.length > 0)
+    ? shiftWorkDays
+    : (globalWorkDays || ['M', 'T', 'W', 'Th', 'F']);
   const offDays = Object.keys(DAY_LABELS)
     .filter(k => !activeWorkDays.includes(k))
     .map(k => DAY_LABELS[k]);
-    
+
   return offDays.includes(dayName);
 };
 
@@ -90,6 +93,33 @@ const istDateKey = (date = new Date()) => {
 const istCalendarDate = (date = new Date()) => {
   const [y, m, d] = istDateKey(date).split('-').map(Number);
   return new Date(y, m - 1, d, 12);
+};
+
+/**
+ * Rounds a punch timestamp to the nearest `intervalMinutes` boundary, per
+ * settings.attendance.roundingInterval/roundingDirection — e.g. a 15-minute
+ * "nearest" rule turns a 09:07 punch-in into 09:00 before it feeds into the
+ * late-check/half-day/payroll math, so employees aren't penalised (or paid)
+ * for minute-level punch noise. A 0/unset interval means rounding is off.
+ */
+const roundPunchTime = (date, intervalMinutes, direction = 'nearest') => {
+  if (!date || !intervalMinutes) return date;
+  const ms = intervalMinutes * 60 * 1000;
+  const t = new Date(date).getTime();
+  if (direction === 'up') return new Date(Math.ceil(t / ms) * ms);
+  if (direction === 'down') return new Date(Math.floor(t / ms) * ms);
+  return new Date(Math.round(t / ms) * ms);
+};
+
+/**
+ * Applies settings.attendance's rounding config to a punch timestamp, but
+ * only when `label` (e.g. 'Punch In') is in the admin's chosen
+ * `roundingAppliedTo` list. Returns the original date untouched otherwise.
+ */
+const applyPunchRounding = (date, label, settings) => {
+  const cfg = settings?.attendance;
+  if (!cfg?.roundingInterval || !cfg?.roundingAppliedTo?.includes(label)) return date;
+  return roundPunchTime(date, cfg.roundingInterval, cfg.roundingDirection);
 };
 
 /**
@@ -216,4 +246,4 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   };
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate };
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, roundPunchTime, applyPunchRounding };

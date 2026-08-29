@@ -1,5 +1,6 @@
 const Department = require('../models/Department');
 const Subscription = require('../models/Subscription');
+const User = require('../models/User');
 const mongoose = require('mongoose');
 
 exports.getDepartments = async (req, res) => {
@@ -90,11 +91,15 @@ exports.updateDepartment = async (req, res) => {
 
 exports.deleteDepartment = async (req, res) => {
     try {
-        const department = await Department.findOneAndDelete({ 
-            _id: req.params.id, 
-            adminId: new mongoose.Types.ObjectId(req.adminId) 
-        });
+        const adminId = new mongoose.Types.ObjectId(req.adminId);
+        const department = await Department.findOneAndDelete({ _id: req.params.id, adminId });
         if (!department) return res.status(404).json({ message: 'Department not found' });
+
+        // Clear the dangling reference on any employee still pointing at this
+        // department (mirrors deleteBranch's cleanup — otherwise department-name
+        // lookups and the employee-count aggregation silently corrupt for them).
+        await User.updateMany({ adminId, departmentId: department._id }, { departmentId: null });
+
         res.json({ message: 'Department removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });

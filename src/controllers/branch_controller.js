@@ -42,6 +42,7 @@ exports.getBranches = async (req, res) => {
                     city: 1,
                     latitude: 1,
                     longitude: 1,
+                    radius: 1,
                     createdAt: 1,
                     employees: { $size: '$employees' }
                 }

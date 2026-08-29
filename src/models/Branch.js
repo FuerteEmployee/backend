@@ -11,7 +11,10 @@ const BranchSchema = new mongoose.Schema({
     branchLocation: { type: String, required: true },
     city: { type: String },
     latitude: { type: Number },
-    longitude: { type: Number }
+    longitude: { type: Number },
+    // Allowed punch-in radius (meters) for THIS branch. When unset, geofencing
+    // falls back to the tenant-wide settings.attendance.officeRadius default.
+    radius: { type: Number, default: null }
 }, { timestamps: true });
 
 BranchSchema.index({ adminId: 1, branchName: 1 });

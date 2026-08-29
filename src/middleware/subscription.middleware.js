@@ -69,7 +69,12 @@ const checkModuleAccess = (moduleName) => async (req, res, next) => {
             return res.status(403).json({ message: 'Trial period ended. Please subscribe to continue.', subscriptionStatus: 'expired' });
         }
 
-        const moduleValue = sub.planId.modules?.[moduleName];
+        // planId.modules is a Mongoose Map — bracket access never reads a Map's
+        // entries (only .get() does), so this must try .get() first or a
+        // disabled/limited module silently falls through as `undefined` and is
+        // never blocked. Falls back to bracket access for a plain object (e.g.
+        // if the plan was ever populated/lean()'d into a POJO upstream).
+        const moduleValue = sub.planId.modules?.get?.(moduleName) ?? sub.planId.modules?.[moduleName];
 
         // Boolean modules
         if (moduleValue === false) {

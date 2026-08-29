@@ -7,8 +7,8 @@ const Festival = require('../models/Festival');
 const Settings = require('../models/Settings');
 const Leave = require('../models/Leave');
 const LeaveType = require('../models/LeaveType');
-const { isWeeklyOff, istDateKey, istCalendarDate } = require('../utils/attendance_helpers');
-const { runEngine, applyRounding, validateSalary } = require('../utils/payroll_engine');
+const { isWeeklyOff, istDateKey, istCalendarDate, toLocalDateKey } = require('../utils/attendance_helpers');
+const { runEngine, applyRounding, validateSalary, buildLeaveMap } = require('../utils/payroll_engine');
 
 // Pure computation — returns the salary figures WITHOUT persisting. Used both by
 // calculateAndSaveSalary (payroll generation) and the employee dashboard's live
@@ -40,17 +40,44 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         Settings.findOne({ adminId }),
     ]);
 
+    // Approved leaves overlapping the window — needed by both paths so a
+    // legacy-path tenant's approved leave actually affects payroll too,
+    // not just engine-path tenants.
+    const [leaves, leaveTypes] = await Promise.all([
+        Leave.find({ adminId, employeeId: emp._id, status: 'approved',
+            startDate: { $lte: endDate }, endDate: { $gte: startDate } }),
+        LeaveType.find({ adminId }),
+    ]);
+    const leaveTypesById = Object.fromEntries(leaveTypes.map(lt => [String(lt._id), lt]));
+    const leaveByKeyLegacy = buildLeaveMap(leaves, leaveTypesById, year, month);
+
+    // ── Overtime (shared by both the legacy and engine paths below) ─────────
+    // Extra worked time beyond `otThreshold` hours on a given day, paid at
+    // `otMultiplier` × an hourly rate derived from the monthly salary, capped
+    // at `weeklyOT` hours per ~7-day slice of the payable window. Only applies
+    // to monthly employees — daily/hourly pay already prices actual hours.
+    const otThreshold = settings?.attendance?.otThreshold || 9;
+    const otMultiplier = settings?.attendance?.otMultiplier ?? 1.5;
+    const weeklyOTCap = settings?.attendance?.weeklyOT || 45;
+    let overtimeHours = 0;
+    if ((emp.employmentType || 'monthly') === 'monthly') {
+        attendanceRecords.forEach(rec => {
+            if (!rec.totalWorkMs) return;
+            const hoursWorked = rec.totalWorkMs / (1000 * 60 * 60);
+            if (hoursWorked > otThreshold) overtimeHours += (hoursWorked - otThreshold);
+        });
+        const otCap = weeklyOTCap * Math.max(1, Math.ceil(calcUpToDay / 7));
+        overtimeHours = Math.min(overtimeHours, otCap);
+    }
+    const hourlyRateForOT = (emp.salary || 0) / totalDaysInMonth / (settings?.attendance?.reqHours || 8);
+    const overtimeAmount = (overtimeHours > 0 && otMultiplier > 0)
+        ? Math.round(hourlyRateForOT * otMultiplier * overtimeHours)
+        : 0;
+    const overtimeLabel = `Overtime (${overtimeHours.toFixed(1)}h @ ${otMultiplier}x)`;
+
     // ── DETERMINISTIC ENGINE PATH ────────────────────────────────────────────
     if (settings && settings.payroll && settings.payroll.enabled === true &&
         (emp.employmentType || 'monthly') === 'monthly') {
-
-        // Fetch leaves + leave-type metadata (engine requires these)
-        const [leaves, leaveTypes] = await Promise.all([
-            Leave.find({ adminId, employeeId: emp._id, status: 'approved',
-                startDate: { $lte: endDate }, endDate: { $gte: startDate } }),
-            LeaveType.find({ adminId }),
-        ]);
-        const leaveTypesById = Object.fromEntries(leaveTypes.map(lt => [String(lt._id), lt]));
 
         const engineResult = runEngine({
             emp, settings, year, month,
@@ -71,8 +98,15 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         let addedOnTop = 0;
         let totalDeductions = 0;
         const c = emp.salaryComponents || {};
+        // Zero payable days means no attendance, no paid leave, and no paid
+        // weekly-off/holiday credit this window — nothing was earned, so no
+        // salary component (including flat "add on top" ones like Bonus)
+        // should apply either. Without this, an employee who never punched
+        // in could still show a non-zero salary from a flat allowance.
+        const hasPayableDays = payableDays > 0;
 
         const addComp = (key, label, type) => {
+            if (!hasPayableDays) return;
             if (c[key] && c[key].enabled) {
                 const amt = c[key].type === 'amount'
                     ? (c[key].amount || 0)
@@ -107,16 +141,23 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
             totalDeductions += advanceDeductionAmount;
         }
 
-        if (reimbursementAmount > 0) {
+        if (reimbursementAmount > 0 && payableDays > 0) {
             earnings.push({ name: 'Expense Reimbursement', amount: reimbursementAmount, included: true });
             addedOnTop += reimbursementAmount;
+        }
+
+        if (overtimeAmount > 0 && payableDays > 0) {
+            earnings.push({ name: overtimeLabel, amount: overtimeAmount, included: true });
+            addedOnTop += overtimeAmount;
         }
 
         const grossSalary = earnedBase + addedOnTop;
         // Round NET exactly once (SOP §6 — rounding applied once at the end)
         const netSalary = applyRounding(grossSalary - totalDeductions, config.rounding);
 
-        const payTypeRemark = `Engine | ${dailyRateBasis} | Payable: ${payableDays}/${totalDaysInWindow} days${isMTD ? ' (MTD)' : ''}${needsReview ? ' ⚠ review' : ''}`;
+        const payTypeRemark = !hasPayableDays
+            ? `Engine | ${dailyRateBasis} | No attendance recorded — nothing payable (${totalDaysInWindow}-day window)`
+            : `Engine | ${dailyRateBasis} | Payable: ${payableDays}/${totalDaysInWindow} days${isMTD ? ' (MTD)' : ''}${needsReview ? ' ⚠ review' : ''}`;
 
         return {
             baseSalary: emp.salary,
@@ -166,7 +207,7 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         let current = new Date(f.startDate);
         let last = new Date(f.endDate || f.startDate);
         while (current <= last) {
-            festivalDates.add(current.toISOString().split('T')[0]);
+            festivalDates.add(toLocalDateKey(current));
             current.setDate(current.getDate() + 1);
         }
     });
@@ -179,31 +220,36 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     let holidayWorkDays = 0;
     let weeklyOffCount = 0;
     let festivalCount = 0;
+    let leavePaidDays = 0;
     const weeklyHolidays = emp.weeklyHolidays || [];
 
     const isAbsentLikeLegacy = (dayNum) => {
         const date = new Date(year, month - 1, dayNum);
-        const dateStr = date.toISOString().split('T')[0];
+        const dateStr = toLocalDateKey(date);
         const rec = attendanceMap.get(dateStr);
-        if (!rec) return true;
-        return !['present', 'late', 'half-day', 'wfh'].includes(rec.status);
+        if (rec && ['present', 'late', 'half-day', 'wfh'].includes(rec.status)) return false;
+        // An approved PAID leave is authorised time off, not an unexcused
+        // absence — don't let it "sandwich-condemn" an adjacent holiday/weekly-off.
+        const leave = leaveByKeyLegacy.get(dateStr);
+        if (leave && leave.isPaid) return false;
+        return true;
     };
 
     const isWorkingDayLegacy = (dayNum) => {
         const date = new Date(year, month - 1, dayNum);
-        const dateStr = date.toISOString().split('T')[0];
+        const dateStr = toLocalDateKey(date);
         const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
         const isFestival = festivalDates.has(dateStr);
-        const isOff = isWeeklyOff(dayName, dayNum, weeklyHolidays, settings?.attendance?.workDays);
+        const isOff = isWeeklyOff(dayName, dayNum, weeklyHolidays, settings?.attendance?.workDays, emp?.shiftId?.workDays);
         return !isFestival && !isOff;
     };
 
     for (let d = startDay; d <= calcUpToDay_legacy; d++) {
         const date = new Date(year, month - 1, d);
-        const dateStr = date.toISOString().split('T')[0];
+        const dateStr = toLocalDateKey(date);
         const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
         const isFestival = festivalDates.has(dateStr);
-        const isOff = isWeeklyOff(dayName, d, weeklyHolidays, settings?.attendance?.workDays);
+        const isOff = isWeeklyOff(dayName, d, weeklyHolidays, settings?.attendance?.workDays, emp?.shiftId?.workDays);
         const attendance = attendanceMap.get(dateStr);
         if (isFestival || isOff) {
             if (attendance && (attendance.status === 'present' || attendance.status === 'late')) {
@@ -242,6 +288,14 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
                 if (isFestival) festivalCount++;
                 else if (isOff) weeklyOffCount++;
             }
+        } else if (!(attendance && ['present', 'late', 'half-day', 'wfh'].includes(attendance.status))) {
+            // Ordinary working day, nobody physically attended — if there's an
+            // approved leave for this exact day, charge it against leave
+            // (paid or not) instead of silently counting it as an unexcused
+            // absence. This is the legacy path's equivalent of the engine's
+            // per-day leave bucket.
+            const leave = leaveByKeyLegacy.get(dateStr);
+            if (leave && leave.isPaid) leavePaidDays += 1;
         }
     }
 
@@ -251,15 +305,26 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         if (festivalDates.has(dateStr)) return sum;
         const recDay = istCalendarDate(rec.date);
         const dayName = recDay.toLocaleDateString('en-US', { weekday: 'long' });
-        const isOff = isWeeklyOff(dayName, recDay.getDate(), weeklyHolidays, settings?.attendance?.workDays);
+        const isOff = isWeeklyOff(dayName, recDay.getDate(), weeklyHolidays, settings?.attendance?.workDays, emp?.shiftId?.workDays);
         if (isOff) return sum;
         if (rec.status === 'present' || rec.status === 'late' || rec.status === 'wfh') return sum + 1;
         if (rec.status === 'half-day') return sum + 0.5;
         return sum;
     }, 0);
 
+    // The sandwich rule already unpays a weekly-off/festival flanked by
+    // absence on both sides, but it can't do that at a window edge with no
+    // neighbour on one side to check (e.g. payroll run on/right after the
+    // very day someone joined). If there's literally zero actual attendance
+    // in the whole window, don't credit any weekly-off/festival day either —
+    // there's no work pattern here to be compensating rest days for.
+    if (normalWorkingAttendance === 0) {
+        festivalCount = 0;
+        weeklyOffCount = 0;
+    }
+
     const totalDaysInWindow = calcUpToDay_legacy - startDay + 1;
-    const payableDays = normalWorkingAttendance + festivalCount + weeklyOffCount + (holidayWorkDays * 2);
+    const payableDays = normalWorkingAttendance + festivalCount + weeklyOffCount + (holidayWorkDays * 2) + leavePaidDays;
     const employmentType = emp.employmentType || 'monthly';
     let earnedBase = 0;
     let payTypeRemark = '';
@@ -300,8 +365,15 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     let addedOnTop = 0;
     let totalDeductions = 0;
     const c = emp.salaryComponents || {};
+    // Zero payable days means no attendance, no paid leave, and no paid
+    // weekly-off/holiday credit this window — nothing was earned, so no
+    // salary component (including flat "add on top" ones like Bonus)
+    // should apply either. Without this, an employee who never punched in
+    // could still show a non-zero salary from a flat allowance.
+    const hasPayableDays = payableDays > 0;
 
     const addComp = (key, label, type) => {
+        if (!hasPayableDays) return;
         if (c[key] && c[key].enabled) {
             let amt = 0;
             if (c[key].type === 'amount') {
@@ -344,9 +416,14 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         totalDeductions += advanceDeductionAmount;
     }
 
-    if (reimbursementAmount > 0) {
+    if (reimbursementAmount > 0 && payableDays > 0) {
         earnings.push({ name: 'Expense Reimbursement', amount: reimbursementAmount, included: true });
         addedOnTop += reimbursementAmount;
+    }
+
+    if (overtimeAmount > 0 && payableDays > 0) {
+        earnings.push({ name: overtimeLabel, amount: overtimeAmount, included: true });
+        addedOnTop += overtimeAmount;
     }
 
     const grossSalary = earnedBase + addedOnTop;
@@ -423,7 +500,7 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
         breakdown: r.breakdown,
         deductions: (r.breakdown.deductions || []).reduce((s, d) => s + (d.amount || 0), 0),
         deductedAdvanceRequestIds: advances.map(a => a._id),
-        reimbursedExpenseIds: expenses.map(e => e._id),
+        reimbursedExpenseIds: r.payableDays > 0 ? expenses.map(e => e._id) : [],
         remarks,
         status,
         grossSalary: r.grossSalary,
@@ -471,7 +548,8 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
 
     // Only newly-included expenses need the status flip — ones already
     // 'reimbursed' from a prior run of this same month are left untouched.
-    const newlyReimbursed = expenses.filter(e => e.status === 'approved');
+    // If payableDays is 0, expenses are held back for a month with payable days.
+    const newlyReimbursed = r.payableDays > 0 ? expenses.filter(e => e.status === 'approved') : [];
     if (newlyReimbursed.length) {
         await Expense.updateMany(
             { _id: { $in: newlyReimbursed.map(e => e._id) } },
@@ -493,7 +571,7 @@ exports.generateSalaryForEmployee = async (req, res) => {
         }
 
         const adminId = req.adminId;
-        const emp = await User.findOne({ _id: employeeId, adminId, role: 'employee' });
+        const emp = await User.findOne({ _id: employeeId, adminId, role: 'employee' }).populate('shiftId');
         if (!emp) return res.status(404).json({ message: 'Employee not found' });
 
         const salaryRecord = await exports.calculateAndSaveSalary(
@@ -514,7 +592,7 @@ exports.generateSalaries = async (req, res) => {
 
         const adminId = req.adminId;
 
-        const employees = await User.find({ adminId, role: 'employee', status: 'active' });
+        const employees = await User.find({ adminId, role: 'employee', status: 'active' }).populate('shiftId');
 
         const results = [];
         const needsReview = [];

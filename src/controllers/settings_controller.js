@@ -1,6 +1,27 @@
 const Settings = require('../models/Settings');
 const User = require('../models/User');
 
+// Flattens plain nested objects into Mongo dot-path keys (e.g.
+// { attendance: { officeRadius: 500 } } -> { 'attendance.officeRadius': 500 })
+// so a $set only touches the fields actually present in the request instead of
+// replacing the whole nested sub-document and wiping out sibling fields that a
+// different settings tab owns (e.g. Settings' Attendance tab vs
+// attendance-config.tsx both writing to `settings.attendance`).
+// Arrays are left as atomic leaf values — merging them by index would be more
+// surprising than useful (e.g. `attendance.workDays`, `attendance.punchSequence.steps`).
+function flattenForSet(obj, prefix = '') {
+    const out = {};
+    for (const [key, value] of Object.entries(obj)) {
+        const path = prefix ? `${prefix}.${key}` : key;
+        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+            Object.assign(out, flattenForSet(value, path));
+        } else {
+            out[path] = value;
+        }
+    }
+    return out;
+}
+
 exports.getSettings = async (req, res) => {
     try {
         let settings = await Settings.findOne({ adminId: req.adminId });
@@ -59,7 +80,7 @@ exports.updateSettings = async (req, res) => {
 
         const settings = await Settings.findOneAndUpdate(
             { adminId: req.adminId },
-            { $set: updateData },
+            { $set: flattenForSet(updateData) },
             { new: true, upsert: true, runValidators: true }
         );
         

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Ticket = require('../models/Ticket');
 const Subscription = require('../models/Subscription');
 
@@ -38,12 +39,10 @@ exports.updateTicketStatus = async (req, res) => {
     try {
         const { status, adminRemark } = req.body;
 
-        // Find by _id only — MongoDB ObjectIds are globally unique so there is
-        // no risk of cross-tenant updates. Auth + subscription middlewares already
-        // validate that the caller is authorised for this tenant before reaching here.
-        // Filtering by adminId was causing 404 errors due to role/adminId mismatches.
-        const ticket = await Ticket.findByIdAndUpdate(
-            req.params.id,
+        // Scoped to the caller's tenant — a bare findByIdAndUpdate would let any
+        // admin/subadmin update any other tenant's ticket by guessing its ObjectId.
+        const ticket = await Ticket.findOneAndUpdate(
+            { _id: req.params.id, adminId: new mongoose.Types.ObjectId(req.adminId) },
             { status, adminRemark },
             { new: true }
         );
@@ -68,6 +67,19 @@ exports.getTickets = async (req, res) => {
             .populate('employeeId', 'name')
             .sort({ createdAt: -1 });
         res.json(tickets);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.deleteTicket = async (req, res) => {
+    try {
+        const ticket = await Ticket.findOneAndDelete({
+            _id: req.params.id,
+            adminId: new mongoose.Types.ObjectId(req.adminId),
+        });
+        if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
+        res.json({ message: 'Ticket removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

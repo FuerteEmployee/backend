@@ -157,6 +157,30 @@ exports.rejectExpense = async (req, res) => {
     }
 };
 
+// Approve/reject every share of a split expense together, so the same
+// real-world expense can't end up half-approved, half-rejected across
+// participants with no way to reconcile it from the UI.
+async function reviewExpenseGroup(req, res, newStatus) {
+    if (req.user.role === 'employee') {
+        return res.status(403).json({ message: `Employees cannot ${newStatus} expenses` });
+    }
+
+    const { splitGroupId } = req.params;
+    const result = await Expense.updateMany(
+        { splitGroupId, adminId: req.adminId, status: 'pending' },
+        { status: newStatus, reviewedBy: req.userId, reviewedAt: new Date() }
+    );
+    if (result.matchedCount === 0) {
+        return res.status(404).json({ message: 'No pending expenses found for this split group' });
+    }
+
+    const expenses = await Expense.find({ splitGroupId, adminId: req.adminId });
+    res.json({ message: `Split expense group ${newStatus}`, expenses });
+}
+
+exports.approveExpenseGroup = (req, res) => reviewExpenseGroup(req, res, 'approved').catch(err => res.status(500).json({ message: err.message }));
+exports.rejectExpenseGroup = (req, res) => reviewExpenseGroup(req, res, 'rejected').catch(err => res.status(500).json({ message: err.message }));
+
 exports.updateExpense = async (req, res) => {
     try {
         if (req.user.role === 'employee') {

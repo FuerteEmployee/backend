@@ -1,58 +1,168 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Salary = require('../models/Salary');
 const Expense = require('../models/Expense');
 const Ticket = require('../models/Ticket');
+const Lead = require('../models/Lead');
 const { computeSalary } = require('./salary_controller');
-const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
+const { istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
+
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// 7 calendar days (oldest first) ending at `endDate`, of present-vs-absent
+// counts, for the dashboard's "Attendance Performance" trend chart.
+// `activeEmployees` is CURRENT headcount used as a stand-in for each day's —
+// historical daily headcount isn't tracked, and headcount rarely swings much
+// day to day. When viewing a past month, `endDate` anchors the window to the
+// end of that month instead of today.
+async function getAttendanceTrend(adminId, activeEmployees, endDate) {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(endDate);
+        d.setDate(d.getDate() - i);
+        days.push(d);
+    }
+    const start = istStartOfDay(days[0]);
+    const end = istEndOfDay(days[days.length - 1]);
+
+    const records = await Attendance.find({
+        adminId, date: { $gte: start, $lte: end },
+        status: { $in: ['present', 'late', 'half-day', 'wfh'] },
+    }).select('date');
+
+    const presentByDay = new Map();
+    records.forEach(r => {
+        const key = istDateKey(r.date);
+        presentByDay.set(key, (presentByDay.get(key) || 0) + 1);
+    });
+
+    return days.map(d => {
+        const key = istDateKey(d);
+        const present = presentByDay.get(key) || 0;
+        return {
+            day: WEEKDAY_LABELS[d.getDay()],
+            present,
+            absent: Math.max(0, activeEmployees - present),
+        };
+    });
+}
+
+// Current-month payroll total per department, for the "Budget Allocation" pie.
+async function getSalaryByDepartment(adminId, month, year) {
+    const rows = await Salary.aggregate([
+        { $match: { adminId: new mongoose.Types.ObjectId(adminId), month, year } },
+        { $lookup: { from: 'users', localField: 'employeeId', foreignField: '_id', as: 'emp' } },
+        { $unwind: '$emp' },
+        { $lookup: { from: 'departments', localField: 'emp.departmentId', foreignField: '_id', as: 'dept' } },
+        { $unwind: { path: '$dept', preserveNullAndEmptyArrays: true } },
+        {
+            $group: {
+                _id: { $ifNull: ['$dept.name', 'Unassigned'] },
+                value: { $sum: { $ifNull: ['$netSalary', '$totalSalary'] } },
+            },
+        },
+        { $project: { _id: 0, name: '$_id', value: 1 } },
+        { $sort: { value: -1 } },
+    ]);
+    return rows;
+}
+
+// Current active-employee headcount per department, for "Team Strength".
+async function getDepartmentHeadcount(adminId) {
+    const rows = await User.aggregate([
+        { $match: { adminId: new mongoose.Types.ObjectId(adminId), role: 'employee', status: 'active' } },
+        { $lookup: { from: 'departments', localField: 'departmentId', foreignField: '_id', as: 'dept' } },
+        { $unwind: { path: '$dept', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: { $ifNull: ['$dept.name', 'Unassigned'] }, value: { $sum: 1 } } },
+        { $project: { _id: 0, name: '$_id', value: 1 } },
+        { $sort: { value: -1 } },
+    ]);
+    return rows;
+}
 
 exports.getSummary = async (req, res) => {
     try {
         const adminId = req.adminId;
-        const todayStart = istStartOfDay();
-        const todayEnd = istEndOfDay();
         const now = new Date();
-        const currentMonth = now.getMonth() + 1;
-        const currentYear = now.getFullYear();
+        const requestedMonth = parseInt(req.query.month, 10);
+        const requestedYear = parseInt(req.query.year, 10);
+        const month = requestedMonth >= 1 && requestedMonth <= 12 ? requestedMonth : now.getMonth() + 1;
+        const year = requestedYear >= 2000 ? requestedYear : now.getFullYear();
+        const isCurrentMonth = month === now.getMonth() + 1 && year === now.getFullYear();
+
+        const monthStart = new Date(year, month - 1, 1);
+        const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+        // For the current month, the day-level cards mean "today"; for a past
+        // month there's no "today" to speak of, so they fall back to counting
+        // whatever was actually recorded across that whole month.
+        const dayWindowStart = isCurrentMonth ? istStartOfDay() : monthStart;
+        const dayWindowEnd = isCurrentMonth ? istEndOfDay() : monthEnd;
+        const trendEndDate = isCurrentMonth ? now : monthEnd;
 
         const [
             totalEmployees,
             activeEmployees,
-            presentToday,
-            lateToday,
-            halfDayToday,
+            presentCount,
+            lateCount,
+            halfDayCount,
+            absentExplicitCount,
             monthlySalaryRecords,
-            totalExpenses,
+            monthlyExpenses,
             recentEmployees,
-            pendingTickets
+            pendingTickets,
+            totalLeads
         ] = await Promise.all([
             User.countDocuments({ adminId, role: 'employee' }),
             User.countDocuments({ adminId, role: 'employee', status: 'active' }),
-            Attendance.countDocuments({ adminId, date: { $gte: todayStart, $lte: todayEnd }, status: { $in: ['present', 'wfh'] } }),
-            Attendance.countDocuments({ adminId, date: { $gte: todayStart, $lte: todayEnd }, status: 'late' }),
-            Attendance.countDocuments({ adminId, date: { $gte: todayStart, $lte: todayEnd }, status: 'half-day' }),
-            Salary.find({ adminId, month: currentMonth, year: currentYear }),
-            Expense.find({ adminId }),
+            Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: { $in: ['present', 'wfh'] } }),
+            Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'late' }),
+            Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'half-day' }),
+            Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'absent' }),
+            Salary.find({ adminId, month, year }),
+            Expense.find({ adminId, date: { $gte: monthStart, $lte: monthEnd } }),
             User.find({ adminId, role: 'employee' }).sort({ createdAt: -1 }).limit(5).populate('departmentId'),
-            Ticket.find({ adminId, status: 'pending' }).sort({ createdAt: -1 }).limit(4).populate('employeeId')
+            Ticket.find({ adminId, status: 'pending' }).sort({ createdAt: -1 }).limit(4).populate('employeeId'),
+            Lead.countDocuments({ adminId })
         ]);
 
         const totalSalary = monthlySalaryRecords.reduce((sum, r) => sum + (r.netSalary || r.totalSalary || 0), 0);
-        const totalExpenseAmount = totalExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+        const totalExpenseAmount = monthlyExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+        const [attendanceTrend, salaryDistribution, departmentHeadcount] = await Promise.all([
+            getAttendanceTrend(adminId, activeEmployees, trendEndDate),
+            getSalaryByDepartment(adminId, month, year),
+            getDepartmentHeadcount(adminId),
+        ]);
 
         res.json({
+            month,
+            year,
+            isCurrentMonth,
             stats: {
                 totalEmployees,
                 activeEmployees,
-                presentToday: presentToday + lateToday,
-                absentToday: totalEmployees - (presentToday + lateToday + halfDayToday),
-                halfDayToday,
+                presentToday: presentCount + lateCount,
+                // Current month: based on activeEmployees, not totalEmployees —
+                // a deactivated/terminated employee never punches in and was
+                // previously permanently counted as "absent" forever. Past
+                // month: whatever was explicitly recorded as absent that month
+                // (extrapolating a full-month absence count would need the
+                // same working-day/holiday logic payroll uses — out of scope
+                // for a dashboard card).
+                absentToday: isCurrentMonth
+                    ? Math.max(0, activeEmployees - (presentCount + lateCount + halfDayCount))
+                    : absentExplicitCount,
+                halfDayToday: halfDayCount,
                 totalSalary,
                 totalExpenses: totalExpenseAmount,
-                totalLeads: 0 // Leads not yet implemented in backend
+                totalLeads
             },
             recentEmployees,
-            pendingTickets
+            pendingTickets,
+            attendanceTrend,
+            salaryDistribution,
+            departmentHeadcount,
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
