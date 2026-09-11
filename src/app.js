@@ -70,6 +70,21 @@ app.use("/api/leaves", require("./routes/leave_routes"));
 app.use("/api/regularizations", require("./routes/regularization_routes"));
 app.use("/api/superadmin", require("./routes/superadmin_routes"));
 app.use("/api/cron", require("./routes/cron_routes"));
+app.use("/api/client", require("./routes/client_routes"));
+app.use("/api/app", require("./routes/app_release_routes"));
+
+// Over-the-air bundle downloads. Served straight off disk because they are
+// immutable, public, and a few megabytes — putting them behind Express auth
+// would break the pre-login update check that exists to rescue a broken build.
+// `immutable` is safe: a new bundle always gets a new filename.
+app.use(
+    "/bundles",
+    express.static(require("path").join(__dirname, "..", "bundles"), {
+        maxAge: "1y",
+        immutable: true,
+        fallthrough: false,
+    }),
+);
 
 // Base route
 app.get("/", (req, res) => {
