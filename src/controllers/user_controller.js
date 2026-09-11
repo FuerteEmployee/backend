@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Festival = require('../models/Festival');
 const Subscription = require('../models/Subscription');
+const LoginSession = require('../models/LoginSession');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
@@ -48,6 +49,52 @@ async function normalizeDeviceUserId(data, adminId, excludeUserId = null) {
 }
 
 // Generate JWT
+/**
+ * Canonicalise an IP before it lands in the audit table.
+ *
+ * Node reports IPv4 clients as IPv4-mapped IPv6 on a dual-stack socket, so a
+ * real address arrives as "::ffff:203.0.113.9" — the prefix is noise an admin
+ * shouldn't have to mentally strip. Loopback likewise arrives as "::1", which
+ * reads as garbage in the UI; store the canonical 127.0.0.1 instead. Loopback
+ * means the request reached the API on the same host: local development, or a
+ * production request that arrived without X-Forwarded-For.
+ */
+const normalizeIp = (ip) => {
+    if (!ip) return null;
+    const stripped = String(ip).replace(/^::ffff:/i, '').trim();
+    if (!stripped) return null;
+    return stripped === '::1' ? '127.0.0.1' : stripped;
+};
+
+/**
+ * Append a login/logout row to the real access log.
+ *
+ * Never allowed to fail the surrounding request: an audit write that blocks a
+ * login would turn a logging problem into an outage. The IP is read from
+ * x-forwarded-for first because in production this sits behind Nginx, where
+ * req.ip is the proxy rather than the client.
+ */
+const recordSession = async (user, action, req, extra = {}) => {
+    try {
+        const forwarded = (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+        await LoginSession.create({
+            ipAddress: normalizeIp(forwarded || req.ip || req.socket?.remoteAddress),
+            adminId: user.role === 'admin' || user.role === 'superadmin' ? user._id : user.adminId,
+            userId: user._id,
+            name: user.name,
+            role: user.role,
+            phone: user.phone,
+            action,
+            userAgent: (req.headers['user-agent'] || '').slice(0, 512) || null,
+            appName: extra.appName || null,
+            installId: extra.installId || null,
+            appVersion: extra.appVersion || null,
+        });
+    } catch (err) {
+        console.error('[session-log] failed to record', action, err.message);
+    }
+};
+
 const generateToken = (user) => {
     return jwt.sign(
         {
@@ -132,6 +179,12 @@ exports.verifyOtp = async (req, res) => {
         user.activeToken = token;
         await user.save();
 
+        await recordSession(user, 'login', req, {
+            appName: app || 'web',
+            installId: req.body.installId,
+            appVersion: req.body.appVersion,
+        });
+
         // For subadmin, pull company info from the parent admin
         let companyName = user.companyName;
         let companyLogo = user.companyLogo;
@@ -149,6 +202,11 @@ exports.verifyOtp = async (req, res) => {
 
         res.status(200).json({
             _id: user._id,
+            // The tenant this session belongs to — their own id for an admin,
+            // the parent's for a subadmin/employee. Mirrors what generateToken
+            // puts in the JWT. The app sends it back as Capgo's custom_id so a
+            // release can be piloted on one company.
+            adminId: user.role === 'admin' || user.role === 'superadmin' ? user._id : user.adminId,
             name: user.name,
             phone: user.phone,
             role: user.role,
@@ -230,6 +288,31 @@ exports.getProfile = async (req, res) => {
 // Return the current tenant's subscription status for the logged-in admin/subadmin.
 // Intentionally NOT gated by subscription middleware so the frontend can still
 // read the status (and render the trial/expired notice) even after expiry.
+/**
+ * POST /api/users/logout
+ *
+ * Exists so the access log has a real logout event to pair with each login —
+ * sessions were previously cleared client-side only, leaving the server with no
+ * idea a session had ended. Also drops activeToken.
+ *
+ * Always responds 200: the client is going to clear its session regardless, and
+ * a failed logout call must not leave the user stuck on a screen they've asked
+ * to leave.
+ */
+exports.logout = async (req, res) => {
+    try {
+        const user = await User.findById(req.userId);
+        if (user) {
+            await recordSession(user, 'logout', req, { appName: req.body?.app || 'web' });
+            user.activeToken = undefined;
+            await user.save();
+        }
+    } catch (error) {
+        console.error('[logout] failed', error.message);
+    }
+    res.status(200).json({ ok: true });
+};
+
 exports.getMySubscription = async (req, res) => {
     try {
         // Superadmins have no tenant subscription of their own.
