@@ -46,7 +46,17 @@ const AttendanceSchema = new mongoose.Schema({
     wasLate: { type: Boolean, default: false },
     shifts: [{
         punchIn: { type: Date },
-        punchOut: { type: Date }
+        punchOut: { type: Date },
+        // Why this session closed. Stamped on EVERY close path -- manual,
+        // device tap, the end-of-day job, an admin correction, or the geofence
+        // engine. Without it a job-closed day is indistinguishable from a real
+        // punch-out, which is how the reference ended up with 97% of records
+        // carrying no reason and no way to audit them after the fact.
+        closeReason: {
+            type: String,
+            enum: [null, 'manual', 'auto_geofence', 'shift_end', 'admin', 'device'],
+            default: null,
+        },
     }],
     // True when the current `punchOut` was set by a device (Lens/biometric)
     // tap, not an explicit app punch-out. Devices only ever send a generic
@@ -56,6 +66,19 @@ const AttendanceSchema = new mongoose.Schema({
     // final signal.
     punchOutIsProvisional: { type: Boolean, default: false },
     totalWorkMs: { type: Number, default: 0 },
+    // Quality of the GPS fix each punch was taken on. Kept per punch rather
+    // than per day because a day can contain several sessions taken in very
+    // different conditions -- indoors on wifi, then outside on GPS.
+    //
+    // `accuracy` is metres and null when unreported; `fixAt` is when the device
+    // captured the position, which can lag the punch by seconds or, on a queued
+    // offline fix, much longer. Both are needed to tell a real boundary case
+    // from a phone guessing off a cell tower.
+    punchInAccuracy: { type: Number, default: null },
+    punchOutAccuracy: { type: Number, default: null },
+    punchInFixAt: { type: Date, default: null },
+    punchOutFixAt: { type: Date, default: null },
+
     // Which punch fields the last day-reconciliation wrote (see
     // utils/punch_reconcile.js). A field holding a value that is NOT listed
     // here was set explicitly by the app — the employee pressed "punch out" —

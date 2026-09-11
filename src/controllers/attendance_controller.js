@@ -8,7 +8,9 @@ const Festival = require('../models/Festival');
 const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
-const { calculateDistance, nearestBranchDistance } = require('../utils/distance');
+const { calculateDistance, nearestBranchDistance, PUNCH_MAX_ACCURACY_M } = require('../utils/distance');
+const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs } = require('../utils/shift_status');
+const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, applyPunchRounding } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
@@ -23,6 +25,47 @@ async function uploadToCloudinary(dataUrl, folder = 'attendance') {
         console.error("Cloudinary Upload Error:", error);
         return null;
     }
+}
+
+/**
+ * Refuse a punch taken on a hopelessly poor fix -- a cell-tower or wifi
+ * fallback position can be kilometres out, and accepting one either lets
+ * somebody punch in from home or blocks somebody standing at the door.
+ *
+ * This is a RETRY, not a denial: the employee is stood there trying to punch,
+ * so the message tells them what to do rather than accusing them of anything.
+ * The threshold is deliberately far looser (150 m) than the 35 m gate used to
+ * decide whether someone has LEFT a fence -- one is "is this fix usable at
+ * all", the other is "is this fix good enough to take pay away on".
+ *
+ * An unreported accuracy is allowed through. Old APKs in the field send 0 for
+ * "unknown", and blocking those would lock every un-updated client out of
+ * punching entirely.
+ *
+ * @returns an error message string, or null when the fix is acceptable
+ */
+function rejectPoorAccuracy(accuracy) {
+    if (accuracy == null) return null;
+    const acc = Number(accuracy);
+    if (!Number.isFinite(acc) || acc <= 0) return null; // unknown, not poor
+    if (acc > PUNCH_MAX_ACCURACY_M) {
+        return `GPS accuracy is too poor (${Math.round(acc)}m). Please move to an open area for a better signal and try again.`;
+    }
+    return null;
+}
+
+/**
+ * Fixes worth storing alongside a punch, so a disputed punch can be judged
+ * later. `fixAt` is when the DEVICE captured the position; a large gap from the
+ * punch time means it came off an offline queue and was never current.
+ */
+function fixQuality(accuracy, fixAt) {
+    const acc = Number(accuracy);
+    const at = fixAt ? new Date(fixAt) : null;
+    return {
+        accuracy: Number.isFinite(acc) && acc > 0 ? acc : null,
+        fixAt: at && !Number.isNaN(at.getTime()) ? at : null,
+    };
 }
 
 function getAttendanceRules(user, settings) {
@@ -64,7 +107,10 @@ async function getEmployeeSummary(adminId, employeeId) {
 exports.punchIn = async (req, res) => {
     try {
         const employeeId = req.userId; // Use userId from protect middleware
-        const { location, photo, isWFH, address } = req.body;
+        const { location, photo, isWFH, address, accuracy, fixAt } = req.body;
+
+        const accuracyError = rejectPoorAccuracy(accuracy);
+        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         const now = new Date();
         const today = istStartOfDay(now);
 
@@ -103,6 +149,18 @@ exports.punchIn = async (req, res) => {
                 return res.status(403).json({ message: 'Remote punch (Work From Home) is disabled for your account.' });
             }
 
+            // Hard cap on sessions per day. Without it a device toggling in a
+            // pocket, or somebody tapping repeatedly, grows shifts[] without
+            // bound -- and every one of those entries is counted by the hours
+            // calculation. The message names the limit so the employee knows
+            // this is a rule rather than a fault.
+            const sessionCount = allSessions(attendance).length;
+            if (sessionCount >= MAX_SESSIONS) {
+                return res.status(400).json({
+                    message: `Maximum daily session limit (${MAX_SESSIONS}) reached. Please contact your admin if you need another session today.`,
+                });
+            }
+
             // Perform multiple punch in
             const photoUrl = photo ? await uploadToCloudinary(photo) : null;
             attendance.punchOut = null;
@@ -119,6 +177,14 @@ exports.punchIn = async (req, res) => {
             }
             
             await attendance.save();
+
+            logAttendanceEvent({
+                adminId: req.adminId, employeeId, type: 'punch-in', at: punchInTime,
+                source: req.isDevicePunch ? (req.deviceSource || 'lens') : 'app',
+                sessionNumber: sessionCount + 1,
+                lat: location?.lat, lng: location?.lng, accuracy,
+            });
+
             const summary = await getEmployeeSummary(req.adminId, employeeId);
             return res.status(201).json({
                 message: `Re-Punched In successfully.`,
@@ -139,7 +205,7 @@ exports.punchIn = async (req, res) => {
         // 4. Geofencing — compute distance to nearest branch whenever we can
         // (persisted below regardless of enforcement), but only HARD-REJECT
         // the punch when requireLocation is actually turned on for this user.
-        const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        const branches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
         let punchInDistance = null;
         if (!isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
             const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, settings?.attendance?.officeRadius || 3000);
@@ -185,8 +251,11 @@ exports.punchIn = async (req, res) => {
                 date: today,
             });
         }
+        const punchInFix = fixQuality(accuracy, fixAt);
         attendance.set({
             punchIn: punchInTime,
+            punchInAccuracy: punchInFix.accuracy,
+            punchInFixAt: punchInFix.fixAt,
             punchInLocation: address || "Location provided by user",
             punchInCoordinates: location || null,
             punchInDistance,
@@ -261,7 +330,10 @@ exports.getPunchLog = async (req, res) => {
 exports.punchOut = async (req, res) => {
     try {
         const employeeId = req.userId;
-        const { location, photo, address } = req.body;
+        const { location, photo, address, accuracy, fixAt } = req.body;
+
+        const accuracyError = rejectPoorAccuracy(accuracy);
+        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         const now = new Date();
         const today = istStartOfDay(now);
 
@@ -301,7 +373,7 @@ exports.punchOut = async (req, res) => {
         // stored and fed into worked-hours/half-day/payroll math.
         const punchOutTime = applyPunchRounding(now, 'Punch Out', settings);
 
-        const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        const branches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
         let punchOutDistance = null;
         if (!attendance.isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
             const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, settings?.attendance?.officeRadius || 3000);
@@ -317,7 +389,10 @@ exports.punchOut = async (req, res) => {
 
         const photoUrl = photo ? await uploadToCloudinary(photo) : null;
 
+        const punchOutFix = fixQuality(accuracy, fixAt);
         attendance.punchOut = punchOutTime;
+        attendance.punchOutAccuracy = punchOutFix.accuracy;
+        attendance.punchOutFixAt = punchOutFix.fixAt;
         attendance.punchOutLocation = address || "Location provided by user";
         attendance.punchOutCoordinates = location || null;
         attendance.punchOutDistance = punchOutDistance;
@@ -328,18 +403,28 @@ exports.punchOut = async (req, res) => {
         // already-closed provisional shift (see canOverrideProvisional above):
         // that shift's own punchIn/punchOut stays as the device recorded it,
         // and totalWorkMs isn't double-counted.
+        let closedSessionNumber = 1;
         if (attendance.shifts && attendance.shifts.length > 0) {
             const lastShift = attendance.shifts[attendance.shifts.length - 1];
+            closedSessionNumber = attendance.shifts.length;
             if (!lastShift.punchOut) {
                 lastShift.punchOut = punchOutTime;
-                const shiftMs = lastShift.punchOut - lastShift.punchIn;
-                attendance.totalWorkMs = (attendance.totalWorkMs || 0) + shiftMs;
+                // Why it closed, on every path. A device toggle is not the same
+                // signal as someone pressing the button, and a day closed by a
+                // job is different again -- without this they are
+                // indistinguishable after the fact.
+                lastShift.closeReason = req.isDevicePunch ? 'device' : 'manual';
             }
-        } else {
-            // Fallback for older records
-            const workMillis = attendance.punchOut - attendance.punchIn;
-            attendance.totalWorkMs = (attendance.totalWorkMs || 0) + workMillis;
         }
+
+        // Recompute from every session, clamped to the shift window and with
+        // lunch deducted, rather than accumulating raw punch gaps.
+        //
+        // The old approach added (out - in) per session: it counted an early
+        // punch-in as worked time, counted time past shift end as worked hours
+        // rather than overtime, and never subtracted lunch -- so a day could
+        // exceed the shift length and still be graded on that inflated figure.
+        attendance.totalWorkMs = computeWorkedMs(attendance, user.shiftId, settings);
 
         // 5. Preserve punctuality signal before status is normalised.
         // status 'late' or 'half-day' (if due to punch-in) gets overwritten below,
@@ -364,7 +449,33 @@ exports.punchOut = async (req, res) => {
             attendance.remarks = (attendance.remarks || '') + remarksAppend;
         }
 
+        // Hours-based grade across ALL sessions, which the shift-rule check
+        // above cannot see -- it only looks at the first punch-in and the last
+        // punch-out. A day worked as three short sessions can satisfy every
+        // shift rule and still fall well short of the required hours.
+        //
+        // Only ever downgrades: if either check says half-day, it is a
+        // half-day. Upgrading here would let hours override an explicit
+        // late-arrival or early-out rule the admin configured.
+        const hoursGrade = gradeDay(attendance, user.shiftId, settings);
+        if (hoursGrade === 'half-day' && attendance.status === 'present') {
+            attendance.status = 'half-day';
+            const note = ' | Short hours across sessions';
+            if (!String(attendance.remarks || '').includes(note.trim())) {
+                attendance.remarks = (attendance.remarks || '') + note;
+            }
+        }
+
         await attendance.save();
+
+        logAttendanceEvent({
+            adminId: req.adminId, employeeId, type: 'punch-out', at: punchOutTime,
+            source: req.isDevicePunch ? (req.deviceSource || 'lens') : 'app',
+            sessionNumber: closedSessionNumber,
+            lat: location?.lat, lng: location?.lng, accuracy,
+            distanceFromBranch: punchOutDistance,
+            closeReason: req.isDevicePunch ? 'device' : 'manual',
+        });
 
         res.json({
             message: 'Punch-out Successful',
@@ -383,6 +494,9 @@ exports.punchOut = async (req, res) => {
 
 exports.lunchIn = async (req, res) => {
     try {
+        const accuracyError = rejectPoorAccuracy(req.body?.accuracy);
+        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
+
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
         const todayStart = istStartOfDay();
@@ -418,7 +532,7 @@ exports.lunchIn = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        const lunchInBranches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        const lunchInBranches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
         let lunchInDistance = null;
         if (attendance.remarks !== 'Work From Home' && lunchInBranches.length > 0 && location?.lat != null && location?.lng != null) {
             const { distance, radius } = nearestBranchDistance(location.lat, location.lng, lunchInBranches, settings?.attendance?.officeRadius || 3000);
@@ -450,6 +564,9 @@ exports.lunchIn = async (req, res) => {
 
 exports.lunchOut = async (req, res) => {
     try {
+        const accuracyError = rejectPoorAccuracy(req.body?.accuracy);
+        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
+
         const employeeId = req.body.employeeId || req.userId;
         const { location, address } = req.body;
         const todayStart = istStartOfDay();
@@ -500,7 +617,7 @@ exports.lunchOut = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        const lunchOutBranches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+        const lunchOutBranches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
         let lunchOutDistance = null;
         if (attendance.remarks !== 'Work From Home' && lunchOutBranches.length > 0 && location?.lat != null && location?.lng != null) {
             const { distance, radius } = nearestBranchDistance(location.lat, location.lng, lunchOutBranches, settings?.attendance?.officeRadius || 3000);
