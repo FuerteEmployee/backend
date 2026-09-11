@@ -293,7 +293,7 @@ exports.getTenant = async (req, res) => {
 
 exports.updateTenant = async (req, res) => {
     try {
-        const { planId, status, billingCycle, trialEndDate, bannerThresholdDays, note, email, password } = req.body;
+        const { planId, status, billingCycle, trialEndDate, bannerThresholdDays, note, email, password, renew } = req.body;
 
         const sub = await Subscription.findOne({ adminId: req.params.id }).populate('planId');
         if (!sub) {
@@ -351,17 +351,41 @@ exports.updateTenant = async (req, res) => {
             if (!Number.isNaN(n)) sub.bannerThresholdDays = n;
         }
 
+        const MS_DAY = 24 * 60 * 60 * 1000;
+        const periodDays = sub.billingCycle === 'annual' ? 365 : 30;
+
+        // An explicit "Renew now" from the super admin. This has to be its own
+        // branch because the implicit one below only fires once the period has
+        // already lapsed (or the tenant is being switched back to active) — so
+        // an *early* renewal, which is the normal case, used to fall through
+        // every condition and silently change nothing. The tenant's countdown
+        // banner then kept running down to the same unchanged deadline, which
+        // reads as "the renewal didn't work".
+        if (renew === true && sub.status === 'active') {
+            // Extend from the existing end date while it is still in the future,
+            // so renewing early adds a period on top of the time already paid
+            // for instead of truncating it back to now + one period.
+            const base = periodLapsed ? now : new Date(sub.currentPeriodEnd);
+            if (periodLapsed) sub.currentPeriodStart = now;
+            sub.currentPeriodEnd = new Date(base.getTime() + periodDays * MS_DAY);
+            sub.graceEndDate = undefined;
+            sub.remindersSent = [];
+            sub.history.push({
+                action: 'renewed',
+                toPlan: sub.planId,
+                date: now,
+                note: note || 'Renewed by super admin',
+            });
+        }
         // Starting/renewing an active period: (re)activating from a non-active
         // status, or already active but the stored period has lapsed (e.g. an
         // old trial/period end date left over from before). Without this, the
         // tenant-facing countdown keeps reading the stale expired date and the
         // banner shows "00:00:00" forever, even right after the super admin
         // sets the tenant to active on a paid plan.
-        if (sub.status === 'active' && (!wasActive || periodLapsed)) {
-            const MS_DAY = 24 * 60 * 60 * 1000;
-            const days = sub.billingCycle === 'annual' ? 365 : 30;
+        else if (sub.status === 'active' && (!wasActive || periodLapsed)) {
             sub.currentPeriodStart = now;
-            sub.currentPeriodEnd = new Date(now.getTime() + days * MS_DAY);
+            sub.currentPeriodEnd = new Date(now.getTime() + periodDays * MS_DAY);
             sub.graceEndDate = undefined;
             sub.remindersSent = [];
             if (wasActive && periodLapsed) {
