@@ -246,4 +246,37 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   };
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, roundPunchTime, applyPunchRounding };
+/**
+ * Parses a biometric terminal's own timestamp ("YYYY-MM-DD HH:MM:SS", as sent
+ * in each tab-separated ATTLOG line) into a real Date.
+ *
+ * The device reports wall-clock time in its configured timezone — IST for these
+ * deployments — with no offset marker. `new Date("2026-09-10 09:30:12")` would
+ * interpret that in the *server* process's timezone, so the same string becomes
+ * a different instant on a UTC cloud VM than on an IST laptop. Building it
+ * explicitly from IST is what makes the parse independent of where the server
+ * happens to run, exactly like istDateKey.
+ *
+ * Returns null for anything unparseable, and for timestamps absurdly far from
+ * now (a terminal whose clock was never set reports years like 2000), so a bad
+ * device clock degrades to "no tap time" rather than writing a punch into the
+ * distant past.
+ */
+const MAX_TAP_DRIFT_MS = 7 * 24 * 60 * 60 * 1000;
+
+const parseDeviceTimestamp = (raw, now = new Date()) => {
+  if (!raw) return null;
+  const m = String(raw).trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+
+  const [, y, mo, d, h, mi, s] = m;
+  const utcMs = Date.UTC(+y, +mo - 1, +d, +h, +mi, +(s || 0));
+  if (Number.isNaN(utcMs)) return null;
+
+  const parsed = new Date(utcMs - IST_OFFSET_MS);
+  if (Math.abs(parsed.getTime() - now.getTime()) > MAX_TAP_DRIFT_MS) return null;
+
+  return parsed;
+};
+
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };

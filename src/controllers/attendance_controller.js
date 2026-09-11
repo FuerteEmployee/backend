@@ -3,6 +3,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Branch = require('../models/Branch');
 const Settings = require('../models/Settings');
+const PunchLog = require('../models/PunchLog');
 const Festival = require('../models/Festival');
 const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
@@ -151,7 +152,7 @@ exports.punchIn = async (req, res) => {
                     distance: Math.round(distance)
                 });
             }
-        } else if (!isWFH && rules.requireLocation && branches.length === 0) {
+        } else if (!isWFH && !req.isDevicePunch && rules.requireLocation && branches.length === 0) {
             return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
@@ -191,7 +192,10 @@ exports.punchIn = async (req, res) => {
             punchInDistance,
             punchInPhoto: photoUrl,
             status: finalStatus,
-            source: req.isDevicePunch ? 'lens' : 'app',
+            // Device punches carry `deviceSource` to say WHICH device: the
+            // iclock/ADMS controller sets 'biometric', the BOTLens camera route
+            // leaves it unset and falls back to 'lens'.
+            source: req.isDevicePunch ? (req.deviceSource || 'lens') : 'app',
             isWFH: !!isWFH,
             remarks: isWFH ? 'Work From Home' : '',
             punchOut: null,
@@ -211,6 +215,44 @@ exports.punchIn = async (req, res) => {
             attendance,
             summary
         });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+/**
+ * GET /api/attendance/punch-log?employeeId=&date=YYYY-MM-DD
+ *
+ * Every raw tap a terminal reported for one employee on one IST day, in tap
+ * order — what the admin panel's expandable tap list shows.
+ *
+ * Discarded taps are included on purpose. When an employee insists they tapped
+ * and the day shows nothing, the answer is usually a debounced double-press,
+ * and that is only visible if the rejected taps come back too.
+ */
+exports.getPunchLog = async (req, res) => {
+    try {
+        const { employeeId, date } = req.query;
+        if (!employeeId || !mongoose.Types.ObjectId.isValid(employeeId)) {
+            return res.status(400).json({ message: 'A valid employeeId is required' });
+        }
+
+        // Accept either a plain 'YYYY-MM-DD' or any parseable date, and resolve
+        // it to the IST day key the taps were filed under.
+        const dayKey = /^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))
+            ? String(date)
+            : istDateKey(date ? new Date(date) : new Date());
+
+        const taps = await PunchLog.find({
+            adminId: new mongoose.Types.ObjectId(req.adminId),
+            employeeId: new mongoose.Types.ObjectId(employeeId),
+            dayKey,
+        })
+            .sort({ deviceTime: 1 })
+            .select('deviceTime receivedAt serialNumber pin source discarded discardReason derivedAction')
+            .lean();
+
+        res.json({ dayKey, taps });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -269,7 +311,7 @@ exports.punchOut = async (req, res) => {
             if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
-        } else if (!attendance.isWFH && rules.requireLocation && branches.length === 0) {
+        } else if (!attendance.isWFH && !req.isDevicePunch && rules.requireLocation && branches.length === 0) {
             return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
@@ -386,7 +428,7 @@ exports.lunchIn = async (req, res) => {
             if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
-        } else if (rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchInBranches.length === 0) {
+        } else if (!req.isDevicePunch && rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchInBranches.length === 0) {
             return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 
@@ -468,7 +510,7 @@ exports.lunchOut = async (req, res) => {
             if (rules.requireLocation && distance > maxRadius) {
                 return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
             }
-        } else if (rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchOutBranches.length === 0) {
+        } else if (!req.isDevicePunch && rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchOutBranches.length === 0) {
             return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
         }
 

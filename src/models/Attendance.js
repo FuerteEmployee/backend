@@ -56,6 +56,14 @@ const AttendanceSchema = new mongoose.Schema({
     // final signal.
     punchOutIsProvisional: { type: Boolean, default: false },
     totalWorkMs: { type: Number, default: 0 },
+    // Which punch fields the last day-reconciliation wrote (see
+    // utils/punch_reconcile.js). A field holding a value that is NOT listed
+    // here was set explicitly by the app — the employee pressed "punch out" —
+    // and reconciliation must not overwrite it with positional inference from
+    // raw device taps. Without this there is no way to tell a derived value
+    // from a deliberate one, and someone who punches in on their phone and out
+    // on the terminal would lose their real start time.
+    derivedFields: { type: [String], default: [] },
     remarks: { type: String, default: null }
 }, { timestamps: true });
 

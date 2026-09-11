@@ -9,8 +9,10 @@ const {
     recordUnresolved,
     isDuplicateLog,
 } = require('../utils/device_registry');
+const PunchLog = require('../models/PunchLog');
 const punchSequence = require('../utils/punch_sequence');
-const { istStartOfDay } = require('../utils/attendance_helpers');
+const punchReconcile = require('../utils/punch_reconcile');
+const { istStartOfDay, istDateKey, parseDeviceTimestamp } = require('../utils/attendance_helpers');
 
 // Maps a resolved action name to the handler that records it.
 const HANDLERS = {
@@ -59,8 +61,87 @@ async function resolveAction(adminId, employeeId, seqConfig) {
     return { action: null, reason: 'sequence_complete' };
 }
 
+/**
+ * Store one raw tap, then re-derive the employee's whole day from every tap
+ * recorded for it (see utils/punch_reconcile.js).
+ *
+ * Three rejections, all of which store the tap rather than dropping it, so
+ * "I tapped and it didn't count" is answerable from the data:
+ *  - `debounced`  — inside the tenant's minimum gap, i.e. pressed twice
+ *  - `duplicate`  — the unique index caught a resent ATTLOG line. Unlike the
+ *    in-memory guard this survives a restart, which is what previously let a
+ *    re-push after a deploy silently re-count taps.
+ *  - unparseable device clock — falls back to receive time, which is the old
+ *    behaviour and still better than discarding the punch entirely.
+ */
+async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings }) {
+    const parsed = parseDeviceTimestamp(rawDeviceTime);
+    const tapTime = parsed || new Date();
+    const dayKey = istDateKey(tapTime);
+    const employeeId = employee._id;
+
+    if (!parsed) {
+        console.warn(
+            `[iclock] SN=${sn} PIN=${pin} sent an unusable timestamp ("${rawDeviceTime}") — ` +
+            'falling back to receive time; check the terminal\'s clock.'
+        );
+    }
+
+    const gap = punchReconcile.debounceMs(settings);
+    if (gap > 0) {
+        const last = await PunchLog.findOne({ adminId, employeeId, dayKey, discarded: { $ne: true } })
+            .sort({ deviceTime: -1 })
+            .select('deviceTime')
+            .lean();
+
+        // Absolute difference, not just "newer than", so a backlog line that
+        // lands next to an already-recorded tap is caught too.
+        if (last && Math.abs(tapTime - new Date(last.deviceTime)) < gap) {
+            await PunchLog.create({
+                adminId, employeeId, dayKey, deviceTime: tapTime,
+                serialNumber: sn, pin: String(pin), source: 'biometric',
+                discarded: true, discardReason: 'debounced',
+            }).catch((err) => {
+                if (err.code !== 11000) throw err;
+            });
+            return { recorded: false, reason: 'debounced', tapTime, dayKey };
+        }
+    }
+
+    try {
+        await PunchLog.create({
+            adminId, employeeId, dayKey, deviceTime: tapTime,
+            serialNumber: sn, pin: String(pin), source: 'biometric',
+        });
+    } catch (err) {
+        if (err.code === 11000) return { recorded: false, reason: 'duplicate', tapTime, dayKey };
+        throw err;
+    }
+
+    const attendance = await punchReconcile.reconcileDay({
+        Attendance, PunchLog, User, Settings, adminId, employeeId, dayKey,
+    });
+
+    return {
+        recorded: true,
+        tapTime,
+        dayKey,
+        tapCount: attendance ? await PunchLog.countDocuments({ adminId, employeeId, dayKey, discarded: { $ne: true } }) : 0,
+    };
+}
+
 function callHandler(handler, adminId, employeeId) {
-    const req = { adminId: String(adminId), userId: String(employeeId), body: {}, isDevicePunch: true };
+    // `deviceSource` distinguishes this channel from the BOTLens camera, which
+    // also punches with isDevicePunch. Both used to land as 'lens', so the
+    // admin table showed the camera icon for fingerprint-terminal punches and
+    // the Attendance model's 'biometric' enum value was never actually written.
+    const req = {
+        adminId: String(adminId),
+        userId: String(employeeId),
+        body: {},
+        isDevicePunch: true,
+        deviceSource: 'biometric',
+    };
     return new Promise(resolve => {
         let statusCode = 200;
         const fakeRes = {
@@ -152,6 +233,7 @@ exports.pushData = async (req, res) => {
     }
 
     let processed = 0;
+    let failed = 0;
 
     for (const line of lines) {
         const [pin, deviceTime] = line.split('\t');
@@ -193,6 +275,26 @@ exports.pushData = async (req, res) => {
 
             const employee = matches[0];
 
+            // Default path: store the raw tap and re-derive the whole day from
+            // every tap so far. Only a tenant that has explicitly configured a
+            // punch sequence falls through to the incremental logic below.
+            if (!seqConfig.enabled) {
+                const outcome = await recordTapAndReconcile({
+                    adminId, employee, sn, pin, rawDeviceTime: deviceTime, settings,
+                });
+                if (outcome.recorded) {
+                    processed++;
+                    markPunch(sn);
+                    console.log(
+                        `[iclock] ${employee.name} (PIN ${pin}) tap @ ${outcome.tapTime.toISOString()} ` +
+                        `→ day ${outcome.dayKey} re-derived from ${outcome.tapCount} tap(s)`
+                    );
+                } else {
+                    console.log(`[iclock] ${employee.name} (PIN ${pin}) tap ignored [${outcome.reason}]`);
+                }
+                continue;
+            }
+
             const { action, reason } = await resolveAction(adminId, employee._id, seqConfig);
 
             // Sequence finished for today and the tenant chose to ignore extras.
@@ -222,11 +324,33 @@ exports.pushData = async (req, res) => {
                 console.warn(`[iclock] ${action} rejected for deviceUserId=${pin}: ${result.body?.message}`);
             }
         } catch (err) {
+            // An unexpected failure — the database was unreachable, a write
+            // threw. Distinct from every `continue` above, which are decisions
+            // (unknown PIN, debounced, sequence complete): those are correctly
+            // final and must be acknowledged, or the device would retry them
+            // forever. This one should be retried.
+            failed++;
             console.error(`[iclock] failed to process line "${line}":`, err.message);
         }
     }
 
-    console.log(`[iclock] processed ${processed}/${lines.length} ATTLOG line(s) from SN=${sn} (adminId=${adminId})`);
+    console.log(
+        `[iclock] processed ${processed}/${lines.length} ATTLOG line(s) from SN=${sn} (adminId=${adminId})` +
+        (failed ? ` — ${failed} line(s) FAILED to store` : '')
+    );
+
+    // Only acknowledge a batch we actually stored. The ADMS ack is per-batch,
+    // not per-line, so a device that receives OK clears its whole buffer —
+    // which previously meant a line that failed to store was lost for good.
+    // Replying 500 makes the terminal keep the batch and re-push it; the
+    // unique index on (serial, pin, deviceTime) discards whatever already
+    // landed, so the retry is idempotent. That safety is new: before durable
+    // dedupe existed, a re-push would have double-counted taps, which is why
+    // acknowledging unconditionally used to be the lesser evil.
+    if (failed > 0) {
+        return res.status(500).type('text/plain').send('RETRY');
+    }
+
     res.type('text/plain').send(`OK: ${processed}`);
 };
 

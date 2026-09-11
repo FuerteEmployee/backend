@@ -118,7 +118,8 @@ async function seed() {
         { slug: 'payment_failed', name: 'Payment failed', description: 'Email + auto-retry after 3 days', isEnabled: true },
         { slug: 'renewal_reminder', name: 'Renewal reminder', description: 'Email 7 days before next renewal date', isEnabled: false },
         { slug: 'grace_expiry', name: 'Grace period expiry', description: 'Lock tenant access after 5-day grace period', isEnabled: true },
-        { slug: 'push_on_upgrade', name: 'Firebase push on upgrade', description: 'Notify tenant employees on plan change', isEnabled: false }
+        { slug: 'push_on_upgrade', name: 'Firebase push on upgrade', description: 'Notify tenant employees on plan change', isEnabled: false },
+        { slug: 'device_offline', name: 'Attendance machine offline', description: 'Warn tenant when a biometric terminal stops reporting for 2+ hours — punches on it are not being recorded', isEnabled: true }
     ];
 
     for (const alert of defaultAlerts) {

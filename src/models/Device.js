@@ -59,6 +59,16 @@ const DeviceSchema = new mongoose.Schema({
     punchCount: { type: Number, default: 0 },
     firmware: { type: String, default: '' },
 
+    // Bookkeeping for the offline alert (jobs/device_health.js).
+    //
+    // `offlineAlertedAt` is what stops a machine that stays unplugged over a
+    // long weekend from sending the same warning on every job run — the alert
+    // repeats only after ALERT_REPEAT_HOURS. It is cleared the moment the
+    // device makes contact again, so the next outage alerts immediately rather
+    // than being suppressed by a stale timestamp.
+    offlineAlertedAt: { type: Date, default: null },
+    offlineAlertCount: { type: Number, default: 0 },
+
     // Rolling diagnostic buffer of punches this device sent that we could NOT
     // attribute to anybody — an unmatched PIN, or pushes that arrived before
     // the machine was claimed. Without this the failure is invisible: the

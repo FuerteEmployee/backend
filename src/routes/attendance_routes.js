@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
     punchIn, punchOut, lunchIn, lunchOut, getReports, updateAttendance, getEmployeeHistory,
-    markAbsent, getAbsentToday, getStats,
+    markAbsent, getAbsentToday, getStats, getPunchLog,
 } = require('../controllers/attendance_controller');
 const { protect, checkPermission } = require('../middleware/auth.middleware');
 const { checkModuleAccess } = require('../middleware/subscription.middleware');
@@ -21,6 +21,7 @@ router.get('/my-history', getEmployeeHistory); // Employee views their own month
 router.get('/reports', getReports); // Fetch attendance history/reports for employees (Admin)
 router.get('/stats', getStats); // Bundled KPI counts + shift-wise breakdown for the Attendance page
 router.get('/absent-today', getAbsentToday); // Active employees with no punch record today
+router.get('/punch-log', getPunchLog); // Every raw device tap for one employee on one day (drives the expandable tap list)
 
 // NOTE: literal paths above must stay registered before the "/:id" wildcard below.
 router.put('/mark-absent', checkPermission('attendance', 'edit'), markAbsent); // Admin marks an employee absent

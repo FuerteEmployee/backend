@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/subscriptions",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/device-health",
+      "schedule": "15 * * * *"
     }
   ]
 }

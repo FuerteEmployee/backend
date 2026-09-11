@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { runSubscriptionLifecycle } = require('../jobs/subscription_lifecycle');
+const { runDeviceHealthCheck } = require('../jobs/device_health');
 
 // Guard cron endpoints with a shared secret so only the scheduler (Vercel Cron,
 // an external uptime trigger, or an authorised operator) can run them.
@@ -32,5 +33,21 @@ const runLifecycle = async (req, res) => {
 
 router.post('/subscriptions', requireCronSecret, runLifecycle);
 router.get('/subscriptions', requireCronSecret, runLifecycle);
+
+// Flag biometric terminals that have stopped reporting. Registered here as well
+// as in jobs/scheduler.js because on serverless there is no persistent process
+// to hold a node-cron timer — a job wired in only one place silently never runs
+// in the other environment.
+const runDeviceHealth = async (req, res) => {
+    try {
+        const summary = await runDeviceHealthCheck();
+        res.json({ ok: true, summary });
+    } catch (error) {
+        res.status(500).json({ ok: false, message: error.message });
+    }
+};
+
+router.post('/device-health', requireCronSecret, runDeviceHealth);
+router.get('/device-health', requireCronSecret, runDeviceHealth);
 
 module.exports = router;

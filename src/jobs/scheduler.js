@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { runSubscriptionLifecycle } = require('./subscription_lifecycle');
+const { runDeviceHealthCheck } = require('./device_health');
 
 let started = false;
 
@@ -19,7 +20,18 @@ function startScheduler() {
         );
     });
 
+    // Hourly, not daily: the point of this alert is that somebody can go and
+    // plug the machine back in during the same working day. A daily 02:00 run
+    // would report a Monday-morning outage on Tuesday, by which time a day of
+    // attendance is already lost.
+    cron.schedule('15 * * * *', () => {
+        runDeviceHealthCheck().catch((err) =>
+            console.error('[scheduler] device health check failed:', err.message),
+        );
+    });
+
     console.log('[scheduler] subscription lifecycle scheduled (daily 02:00)');
+    console.log('[scheduler] device health check scheduled (hourly at :15)');
 }
 
 module.exports = { startScheduler };

@@ -80,6 +80,12 @@ const SettingsSchema = new mongoose.Schema({
         otThreshold: { type: Number, default: 9 },
         weeklyOT: { type: Number, default: 45 },
         otMultiplier: { type: Number, default: 1.5 },
+        // Minimum gap between two taps by the same employee on a biometric
+        // terminal. A second tap inside this window is treated as an accidental
+        // repeat and discarded (still stored, flagged, so it stays auditable) —
+        // without it, someone arriving at 09:30 who presses twice gets a
+        // punch-in and an instant "lunch break started". 0 disables.
+        punchDebounceSeconds: { type: Number, default: 120 },
         // Punch-time rounding applied before late/half-day/payroll math runs
         // (see attendance_helpers.js's roundPunchTime).
         roundingInterval: { type: Number, default: 0 }, // minutes; 0 = off

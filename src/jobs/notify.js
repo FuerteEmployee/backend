@@ -43,4 +43,37 @@ async function sendSubscriptionReminder({ admin, kind, daysRemaining }) {
     });
 }
 
-module.exports = { dispatch, sendSubscriptionReminder };
+/**
+ * Tell a tenant that one of their biometric terminals has stopped reporting.
+ *
+ * This is the failure mode nobody notices on their own: the terminal keeps
+ * matching fingers and beeping locally, so employees believe attendance is
+ * being recorded, while nothing reaches the server. Without an alert the
+ * discovery point is month-end payroll.
+ *
+ * @param {Object} opts
+ * @param {Object} opts.admin        - tenant admin User (needs phone/email/name)
+ * @param {Object} opts.device       - the Device that went quiet
+ * @param {number} opts.minutesQuiet - how long since any contact
+ */
+async function sendDeviceOfflineAlert({ admin, device, minutesQuiet }) {
+    const company = admin.companyName || admin.name || 'there';
+    const label = device.label || device.serialNumber;
+    const forLabel = minutesQuiet >= 1440
+        ? `${Math.floor(minutesQuiet / 1440)} day(s)`
+        : `${Math.floor(minutesQuiet / 60)} hour(s)`;
+
+    const message =
+        `Hi ${company}, your attendance machine "${label}" has not reported to BOT for ${forLabel}. ` +
+        `Punches made on it are NOT being recorded. Please check its power and network. ` +
+        `Support: +91 97240 00697.`;
+
+    return dispatch({
+        to: admin.phone,
+        name: company,
+        channel: admin.email ? 'sms+email' : 'sms',
+        message,
+    });
+}
+
+module.exports = { dispatch, sendSubscriptionReminder, sendDeviceOfflineAlert };
