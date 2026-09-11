@@ -10,12 +10,24 @@ const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 exports.updateLocation = async (req, res) => {
     try {
         const employeeId = req.userId;
-        const { latitude, longitude } = req.body;
+        const { latitude, longitude, accuracy } = req.body;
+
+        // The client has always sent `accuracy`; it was discarded because the
+        // schema did not declare it. Stored now because nothing can judge
+        // whether a fix is worth acting on without it.
+        //
+        // Normalised to null rather than kept as-is: the shipped app sends 0
+        // for "unreported", and a 0 would otherwise read as a perfect fix. A
+        // real GPS reading never reports 0 m uncertainty.
+        const accN = Number(accuracy);
+        const accuracyM = Number.isFinite(accN) && accN > 0 ? accN : null;
+
         const tracking = await Tracking.create({
             adminId: req.adminId,
             employeeId,
             latitude,
             longitude,
+            accuracy: accuracyM,
             timestamp: new Date()
         });
         res.status(201).json(tracking);
