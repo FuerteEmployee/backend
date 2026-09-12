@@ -264,7 +264,7 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
  */
 const MAX_TAP_DRIFT_MS = 7 * 24 * 60 * 60 * 1000;
 
-const parseDeviceTimestamp = (raw, now = new Date()) => {
+const parseDeviceTimestamp = (raw, now = new Date(), offsetMinutes = 0) => {
   if (!raw) return null;
   const m = String(raw).trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
   if (!m) return null;
@@ -273,7 +273,11 @@ const parseDeviceTimestamp = (raw, now = new Date()) => {
   const utcMs = Date.UTC(+y, +mo - 1, +d, +h, +mi, +(s || 0));
   if (Number.isNaN(utcMs)) return null;
 
-  const parsed = new Date(utcMs - IST_OFFSET_MS);
+  // Per-device correction for a terminal whose timezone is set wrong. Always an
+  // explicit, stored value (Device.clockOffsetMinutes) -- never inferred here,
+  // so that fixing the device on site does not start double-correcting.
+  const correctionMs = (Number(offsetMinutes) || 0) * 60 * 1000;
+  const parsed = new Date(utcMs - IST_OFFSET_MS + correctionMs);
   if (Math.abs(parsed.getTime() - now.getTime()) > MAX_TAP_DRIFT_MS) return null;
 
   return parsed;

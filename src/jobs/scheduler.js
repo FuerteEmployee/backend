@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const { runSubscriptionLifecycle } = require('./subscription_lifecycle');
 const { runDeviceHealthCheck } = require('./device_health');
+const { closeForgottenPunches } = require('./attendance_close');
 
 let started = false;
 
@@ -30,7 +31,17 @@ function startScheduler() {
         );
     });
 
+    // 04:00 IST, fixed rather than configurable: this is a safety net, not a
+    // policy. It closes YESTERDAY only -- running it against today would punch
+    // out the entire night shift mid-shift.
+    cron.schedule('0 4 * * *', () => {
+        closeForgottenPunches().catch((err) =>
+            console.error('[scheduler] forgotten-punch close failed:', err.message),
+        );
+    }, { timezone: process.env.TZ || 'Asia/Kolkata' });
+
     console.log('[scheduler] subscription lifecycle scheduled (daily 02:00)');
+    console.log('[scheduler] forgotten-punch close scheduled (daily 04:00 IST)');
     console.log('[scheduler] device health check scheduled (hourly at :15)');
 }
 

@@ -13,6 +13,9 @@ const PunchLog = require('../models/PunchLog');
 const punchSequence = require('../utils/punch_sequence');
 const punchReconcile = require('../utils/punch_reconcile');
 const { istStartOfDay, istDateKey, parseDeviceTimestamp } = require('../utils/attendance_helpers');
+const Device = require('../models/Device');
+const { recordClockSkew } = require('../utils/device_clock');
+const { sendDeviceClockAlert } = require('../jobs/notify');
 
 // Maps a resolved action name to the handler that records it.
 const HANDLERS = {
@@ -62,6 +65,40 @@ async function resolveAction(adminId, employeeId, seqConfig) {
 }
 
 /**
+ * Fold this tap into the terminal's clock-health samples, and alert once a
+ * day for as long as the clock stays wrong.
+ *
+ * Fire-and-forget like the event logger: a punch must never fail because a
+ * diagnostic about the machine that sent it could not be written.
+ */
+async function checkDeviceClock(device, tapTime) {
+    const { suspected, description, minMinutes } = recordClockSkew(device, tapTime, new Date());
+
+    const update = {
+        clockSkewSamples: device.clockSkewSamples,
+        clockSkewMinutes: minMinutes,
+    };
+
+    const lastAlert = device.clockSkewAlertedAt ? new Date(device.clockSkewAlertedAt).getTime() : 0;
+    const dueAgain = Date.now() - lastAlert > 24 * 60 * 60 * 1000;
+
+    if (suspected && dueAgain) {
+        update.clockSkewAlertedAt = new Date();
+        console.warn(`[iclock] SN=${device.serialNumber} clock is off by ~${minMinutes} min. ${description}`);
+        if (device.adminId) {
+            const admin = await User.findById(device.adminId).select('name companyName phone email').lean();
+            if (admin) await sendDeviceClockAlert({ admin, device, description }).catch(() => {});
+        }
+    } else if (!suspected && device.clockSkewAlertedAt) {
+        // Clock corrected on site -- clear the latch so the next genuine
+        // problem alerts immediately instead of waiting out the repeat window.
+        update.clockSkewAlertedAt = null;
+    }
+
+    await Device.updateOne({ _id: device._id }, { $set: update });
+}
+
+/**
  * Store one raw tap, then re-derive the employee's whole day from every tap
  * recorded for it (see utils/punch_reconcile.js).
  *
@@ -74,8 +111,12 @@ async function resolveAction(adminId, employeeId, seqConfig) {
  *  - unparseable device clock — falls back to receive time, which is the old
  *    behaviour and still better than discarding the punch entirely.
  */
-async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings }) {
-    const parsed = parseDeviceTimestamp(rawDeviceTime);
+async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings, device }) {
+    // A terminal configured to the wrong timezone reports a perfectly
+    // plausible timestamp that is a whole offset out. `clockOffsetMinutes` is
+    // the stored, deliberate correction for such a device; it stays 0 unless
+    // somebody has set it.
+    const parsed = parseDeviceTimestamp(rawDeviceTime, new Date(), device?.clockOffsetMinutes || 0);
     const tapTime = parsed || new Date();
     const dayKey = istDateKey(tapTime);
     const employeeId = employee._id;
@@ -85,6 +126,9 @@ async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime
             `[iclock] SN=${sn} PIN=${pin} sent an unusable timestamp ("${rawDeviceTime}") — ` +
             'falling back to receive time; check the terminal\'s clock.'
         );
+    } else if (device) {
+        checkDeviceClock(device, tapTime).catch((err) =>
+            console.error('[iclock] clock check failed:', err.message));
     }
 
     const gap = punchReconcile.debounceMs(settings);
@@ -280,7 +324,7 @@ exports.pushData = async (req, res) => {
             // punch sequence falls through to the incremental logic below.
             if (!seqConfig.enabled) {
                 const outcome = await recordTapAndReconcile({
-                    adminId, employee, sn, pin, rawDeviceTime: deviceTime, settings,
+                    adminId, employee, sn, pin, rawDeviceTime: deviceTime, settings, device,
                 });
                 if (outcome.recorded) {
                     processed++;

@@ -57,6 +57,7 @@ app.use("/api/advance-salary", require("./routes/advanceSalary"));
 app.use("/api/tickets", require("./routes/ticket_routes"));
 app.use("/api/shifts", require("./routes/shift_routes"));
 app.use("/api/tracking", require("./routes/tracking_routes"));
+app.use("/api/geofence", require("./routes/geofence_routes"));
 app.use("/api/dashboard", require("./routes/dashboard_routes"));
 app.use("/api/leave-types", require("./routes/leave_type_routes"));
 app.use("/api/festivals", require("./routes/festival_routes"));

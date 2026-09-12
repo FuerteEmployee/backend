@@ -93,5 +93,42 @@ console.log('\n— overnight shift —');
   ok('22:00-06:00 counts 8h', w === 8 * 3600000, H(w));
 }
 
+
+// -- A configured lunch longer than the shift --------------------------------
+// Found by reading the reference project's OWN test suite, which asserts the
+// required-hours bar "clamps to 0 rather than going negative". Our bar did
+// clamp -- but the DEDUCTION did not, so a short shift subtracted a full
+// company-wide lunch it had no room for, and every such day graded Absent even
+// when the employee worked the whole shift.
+console.log('\n- a lunch longer than the shift cannot consume the day -');
+{
+    const D = new Date('2026-09-12T00:00:00+05:30');
+    const at = (h, mi) => new Date(`2026-09-12T${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}:00+05:30`);
+    const cfg = { attendance: { minLunch: 60 } };
+
+    const relief = { startTime: '09:00', endTime: '09:20' };
+    const reliefDay = { date: D, shifts: [{ punchIn: at(9, 0), punchOut: at(9, 20) }] };
+    ok('20m shift worked in full is not Absent',
+        S.gradeDay(reliefDay, relief, cfg) === 'present',
+        `got ${S.gradeDay(reliefDay, relief, cfg)}`);
+    ok('20m shift keeps its full 20m of worked time',
+        S.computeWorkedMs(reliefDay, relief, cfg) === 20 * 60 * 1000,
+        `got ${S.computeWorkedMs(reliefDay, relief, cfg)}`);
+
+    // The ordinary case must be untouched: a normal shift still pays the lunch.
+    const normal = { startTime: '09:00', endTime: '19:00' };
+    const normalDay = { date: D, shifts: [{ punchIn: at(9, 0), punchOut: at(19, 0) }] };
+    ok('10h shift still deducts the configured 60m lunch',
+        S.computeWorkedMs(normalDay, normal, cfg) === 9 * 3600e3,
+        `got ${S.computeWorkedMs(normalDay, normal, cfg)}`);
+
+    // A shift exactly as long as the lunch has no room for it either.
+    const exact = { startTime: '09:00', endTime: '10:00' };
+    const exactDay = { date: D, shifts: [{ punchIn: at(9, 0), punchOut: at(10, 0) }] };
+    ok('a shift exactly as long as the lunch is not wiped out',
+        S.computeWorkedMs(exactDay, exact, cfg) === 3600e3,
+        `got ${S.computeWorkedMs(exactDay, exact, cfg)}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

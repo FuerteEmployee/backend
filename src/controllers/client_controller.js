@@ -59,15 +59,37 @@ exports.reportClient = async (req, res) => {
                     'permissions.coarseLocation': permissionState(perms.coarseLocation),
                     'permissions.camera': permissionState(perms.camera),
                     'permissions.notifications': permissionState(perms.notifications),
+                    // Background-tracking readiness. Each has its own fix, so
+                    // support needs them individually rather than one rolled-up
+                    // "location is broken".
+                    'permissions.backgroundLocation': permissionState(perms.backgroundLocation),
+                    'permissions.preciseLocation': permissionState(perms.preciseLocation),
+                    'permissions.batteryUnrestricted': permissionState(perms.batteryUnrestricted),
+                    'permissions.autoStart': permissionState(perms.autoStart),
+                    oemHint: str(req.body.manufacturer, 64),
                     lastSeenAt: now,
                 },
                 // Only on insert, so the true first sighting is never overwritten
                 // by a later report.
                 $setOnInsert: { firstSeenAt: now },
                 $inc: { appOpenCount: 1 },
+                // Latch only. A report saying setup is complete sets it; a later
+                // report can never clear it, because "never completed setup" and
+                // "completed it, then a permission was revoked" need different
+                // help and the second must stay distinguishable.
+                ...(req.body.trackingSetupComplete === true
+                    ? { $max: { trackingSetupCompletedAt: now } }
+                    : {}),
             },
             { new: true, upsert: true, setDefaultsOnInsert: true },
         );
+
+        // The boolean mirrors the timestamp so a reader never has to know that
+        // the latch is implemented as a $max on a date.
+        if (req.body.trackingSetupComplete === true && !device.trackingSetupComplete) {
+            device.trackingSetupComplete = true;
+            await device.save();
+        }
 
         res.json({ ok: true, installId: device.installId, firstSeenAt: device.firstSeenAt });
     } catch (error) {

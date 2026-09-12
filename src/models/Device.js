@@ -83,6 +83,23 @@ const DeviceSchema = new mongoose.Schema({
         at: { type: Date, default: Date.now },
     }],
 
+    // ── Clock health (see utils/device_clock.js) ────────────────────────────
+    // Rolling skew samples and their 24h minimum. The minimum is the signal:
+    // an offline backlog contributes a near-zero sample once the device is
+    // live again, a wrong timezone never does.
+    clockSkewSamples: [{
+        minutes: { type: Number },
+        at: { type: Date },
+        _id: false,
+    }],
+    clockSkewMinutes: { type: Number, default: null },
+    clockSkewAlertedAt: { type: Date, default: null },
+    // Deliberate correction, in minutes, ADDED to every timestamp this terminal
+    // reports. Left at 0 by default and never set automatically: silently
+    // correcting a clock means that the day somebody finally fixes the device,
+    // every punch starts being corrected twice with nothing to show why.
+    clockOffsetMinutes: { type: Number, default: 0 },
+
     notes: { type: String, default: '' },
 }, { timestamps: true });
 

@@ -43,6 +43,11 @@ exports.getBranches = async (req, res) => {
                     latitude: 1,
                     longitude: 1,
                     radius: 1,
+                    // Without this the admin panel could never show, let alone
+                    // edit, the per-branch fence switch: the field existed on
+                    // the schema but the list projection dropped it, so every
+                    // branch read back as undefined.
+                    geoFenceEnabled: 1,
                     createdAt: 1,
                     employees: { $size: '$employees' }
                 }

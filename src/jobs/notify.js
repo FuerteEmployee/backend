@@ -76,4 +76,69 @@ async function sendDeviceOfflineAlert({ admin, device, minutesQuiet }) {
     });
 }
 
-module.exports = { dispatch, sendSubscriptionReminder, sendDeviceOfflineAlert };
+/**
+ * Alert a tenant that a terminal's clock is wrong.
+ *
+ * Deliberately phrased as an instruction rather than a measurement: the person
+ * who reads this has to walk to the machine and change a setting, and "clock
+ * skew 330 minutes" does not tell them to do that.
+ *
+ * @param {Object} opts.admin       - tenant admin User
+ * @param {Object} opts.device      - the Device with the bad clock
+ * @param {string} opts.description - plain-language cause, from device_clock.js
+ */
+async function sendDeviceClockAlert({ admin, device, description }) {
+    const company = admin.companyName || admin.name || 'there';
+    const label = device.label || device.serialNumber;
+
+    const message =
+        `Hi ${company}, the clock on your attendance machine "${label}" is wrong. ${description} ` +
+        `Until it is corrected, every punch recorded on that machine has the wrong time and can affect attendance and salary. ` +
+        `Support: +91 97240 00697.`;
+
+    return dispatch({
+        to: admin.phone,
+        name: company,
+        channel: admin.email ? 'sms+email' : 'sms',
+        message,
+    });
+}
+
+/**
+ * Tell an employee their session was closed automatically.
+ *
+ * This is not a nicety. A punch-out nobody made, discovered days later on a
+ * payslip, is indistinguishable from the system losing their hours -- and by
+ * then the evidence is cold and the argument is unwinnable. Told the same hour,
+ * it is a thirty-second correction.
+ *
+ * The message therefore carries the MEASUREMENT, not just the verdict: the
+ * distance and the branch are what let someone immediately say "no, I was in
+ * the back office" and get it reversed.
+ */
+async function sendAutoPunchOutNotice({ employee, attendance, branchName, distanceM, closedAt }) {
+    const when = closedAt
+        ? new Date(closedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })
+        : 'just now';
+
+    const message =
+        `Hi ${employee.name || 'there'}, you were automatically punched out at ${when} because your phone was ` +
+        `${distanceM != null ? `${distanceM}m` : 'outside the allowed radius'} from ` +
+        `${branchName || 'your branch'}. If that is wrong, tell your manager today and they can restore it. ` +
+        `Support: +91 97240 00697.`;
+
+    return dispatch({
+        to: employee.phone,
+        name: employee.name,
+        channel: employee.email ? 'sms+email' : 'sms',
+        message,
+    });
+}
+
+module.exports = {
+    dispatch,
+    sendSubscriptionReminder,
+    sendDeviceOfflineAlert,
+    sendDeviceClockAlert,
+    sendAutoPunchOutNotice,
+};

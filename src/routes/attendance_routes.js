@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
     punchIn, punchOut, lunchIn, lunchOut, getReports, updateAttendance, getEmployeeHistory,
-    markAbsent, getAbsentToday, getStats, getPunchLog,
+    markAbsent, getAbsentToday, getStats, getPunchLog, getToday,
 } = require('../controllers/attendance_controller');
 const { protect, checkPermission } = require('../middleware/auth.middleware');
 const { checkModuleAccess } = require('../middleware/subscription.middleware');
@@ -17,6 +17,7 @@ router.post('/lunch-in', lunchIn); // Record start of lunch break
 router.post('/lunch-out', lunchOut); // Record end of lunch break
 
 // --- Reports & Management ---
+router.get('/today', getToday); // The caller's OWN day -- polled by the native background tracker to decide whether to keep running
 router.get('/my-history', getEmployeeHistory); // Employee views their own monthly attendance logs
 router.get('/reports', getReports); // Fetch attendance history/reports for employees (Admin)
 router.get('/stats', getStats); // Bundled KPI counts + shift-wise breakdown for the Attendance page

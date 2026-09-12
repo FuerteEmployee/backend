@@ -43,6 +43,30 @@ const SettingsSchema = new mongoose.Schema({
         defaultShiftId: { type: mongoose.Schema.Types.ObjectId, ref: 'Shift' },
         requireLocation: { type: Boolean, default: true },
         officeRadius: { type: Number, default: 3000 },
+
+        // ── Geofence auto punch-out ─────────────────────────────────────────
+        // Off by default, and OFF is the only safe default: turning this on
+        // lets the server end somebody's working day without them touching
+        // anything, which affects their pay.
+        //
+        // `shadowMode` is the deliberate middle state and every tenant must
+        // pass through it. With shadowMode true the engine runs in full, writes
+        // a GeofenceAudit row for every decision, and closes NOTHING. That is
+        // what makes the behaviour reviewable on a tenant's own real staff and
+        // real building before it is trusted -- the alternative is discovering
+        // the thresholds are wrong by taking money off somebody's payslip.
+        //
+        // NAMED `geofenceAutoPunchOut`, NOT `autoPunchOut`. There is already an
+        // `autoPunchOut` Boolean further down this same object (beside
+        // earliestIn/latestOut), meaning "close the day at the latest allowed
+        // time". Reusing the name produced a DUPLICATE KEY in the object
+        // literal, where the later definition silently wins -- so this config
+        // vanished and `autoPunchOut.enabled` read undefined off a boolean,
+        // leaving the engine permanently unarmed with no error anywhere.
+        geofenceAutoPunchOut: {
+            enabled: { type: Boolean, default: false },
+            shadowMode: { type: Boolean, default: true },
+        },
         remotePunch: { type: Boolean, default: true },
         workDays: { type: [String], default: ['M', 'T', 'W', 'Th', 'F'] },
         reqHours: { type: Number, default: 8 },

@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { istStartOfDay, istDateKey, applyPunchRounding, isLatePunchIn, determineHalfDayStatus } = require('./attendance_helpers');
+const { computeWorkedMs, computeSessionWorkMs, gradeDay } = require('./shift_status');
 // Safe to require directly: salary_controller pulls only models and utils, so
 // there is no cycle back into this file or into attendance_controller.
 const { calculateAndSaveSalary } = require('../controllers/salary_controller');
@@ -123,6 +124,8 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
         Settings.findOne({ adminId }).lean(),
     ]);
 
+    const shift = user?.shiftId || null;
+
     let attendance = await Attendance.findOne({ adminId, employeeId, date: dayStart });
     if (!attendance) {
         attendance = new Attendance({
@@ -160,25 +163,60 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
     // of day. An explicit app punch-out (which we would not own) is final.
     attendance.punchOutIsProvisional = attendance.punchOut ? nowOwned.includes('punchOut') : false;
 
-    if (attendance.punchIn && attendance.punchOut) {
-        const gross = new Date(attendance.punchOut) - new Date(attendance.punchIn);
-        let net = Math.max(0, gross);
-        if (attendance.lunchInTime && attendance.lunchOutTime) {
-            const breakMs = new Date(attendance.lunchOutTime) - new Date(attendance.lunchInTime);
-            if (breakMs > 0) net = Math.max(0, net - breakMs);
+    // ── Sessions ────────────────────────────────────────────────────────────
+    // Reconciliation must NEVER flatten a day the app has already split into
+    // several sessions. Rebuilding shifts[] from the two derived endpoints
+    // deleted sessions 2..n outright -- which is precisely the day this whole
+    // system exists to support: punched in on the phone, lunch on the camera,
+    // out on the terminal. The raw taps stay authoritative for the tap list;
+    // the session array belongs to whichever channel actually opened it.
+    const existing = Array.isArray(attendance.shifts) ? attendance.shifts.filter(Boolean) : [];
+    const deviceSource = attendance.source === 'lens' ? 'lens' : 'biometric';
+
+    if (existing.length > 1) {
+        // Multi-session day: touch only the ends this derivation owns.
+        if (nowOwned.includes('punchIn') && existing[0]) {
+            existing[0].punchIn = attendance.punchIn;
+            existing[0].punchInSource = deviceSource;
         }
-        attendance.totalWorkMs = net;
-        // Kept in sync for the parts of the UI that read sessions rather than
-        // the raw tap list; the PunchLog is the real record of what happened.
-        attendance.shifts = [{ punchIn: attendance.punchIn, punchOut: attendance.punchOut }];
+        if (nowOwned.includes('punchOut')) {
+            const last = existing[existing.length - 1];
+            if (last) {
+                last.punchOut = attendance.punchOut;
+                last.punchOutSource = deviceSource;
+                last.closeReason = 'device';
+            }
+        }
+        attendance.shifts = existing;
     } else if (attendance.punchIn) {
-        attendance.totalWorkMs = 0;
-        attendance.shifts = [{ punchIn: attendance.punchIn, punchOut: null }];
+        const prev = existing[0]
+            ? (typeof existing[0].toObject === 'function' ? existing[0].toObject() : existing[0])
+            : {};
+        attendance.shifts = [{
+            ...prev,
+            punchIn: attendance.punchIn,
+            punchOut: attendance.punchOut || null,
+            punchInSource: nowOwned.includes('punchIn') ? deviceSource : (prev.punchInSource || 'app'),
+            punchOutSource: attendance.punchOut
+                ? (nowOwned.includes('punchOut') ? deviceSource : (prev.punchOutSource || 'app'))
+                : null,
+            closeReason: attendance.punchOut
+                ? (nowOwned.includes('punchOut') ? 'device' : (prev.closeReason || 'manual'))
+                : null,
+        }];
+    }
+
+    // Worked time through the SAME function the live punch-out path uses.
+    // This was a local gross-minus-break sum with no shift clamp and no
+    // configured-minimum lunch, so one identical day graded differently
+    // depending on whether the app or the terminal happened to close it.
+    attendance.totalWorkMs = computeWorkedMs(attendance, shift, settings);
+    for (const sess of (attendance.shifts || [])) {
+        sess.workMs = computeSessionWorkMs(sess, attendance, shift);
     }
 
     // Status, recomputed the same way the live punch-out and regularization
     // paths do it, so all three agree.
-    const shift = user?.shiftId || null;
     if (!attendance.isWFH) {
         let status = 'present';
         if (shift && isLatePunchIn(attendance.punchIn, shift, settings)) status = 'late';
@@ -204,6 +242,19 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
                 }
             }
         }
+
+        // Same hours-based downgrade the live punch-out applies, so a day
+        // closed by a terminal cannot be graded Full when the identical day
+        // closed by the app would be Half. Only ever downgrades.
+        const hoursGrade = gradeDay(attendance, shift, settings);
+        if (hoursGrade === 'half-day' && status === 'present') {
+            status = 'half-day';
+            const note = ' | Short hours across sessions';
+            if (!String(attendance.remarks || '').includes(note.trim())) {
+                attendance.remarks = (attendance.remarks || '') + note;
+            }
+        }
+
         attendance.status = status;
     }
 

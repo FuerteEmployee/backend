@@ -82,7 +82,14 @@ async function run(dayKey = DAY) {
   ok('2 taps → in + out, no lunch',
      hhmm(a.punchIn) === '09:30' && hhmm(a.punchOut) === '18:30' && !a.lunchInTime && !a.lunchOutTime);
   ok('2 taps → device punchOut IS provisional', a.punchOutIsProvisional === true);
-  ok('2 taps → totalWorkMs = 9h', a.totalWorkMs === 9 * 3600e3, `got ${a.totalWorkMs}`);
+  // 8.5h, not the raw 9h span: Settings.minLunch defaults to 30 and a lunch
+  // shorter than the configured minimum -- here, none punched at all -- still
+  // costs that minimum. Reconciliation used to run its own gross-minus-break
+  // sum and returned 9h, so an identical day graded differently depending on
+  // whether the terminal or the app closed it. Both now go through
+  // computeWorkedMs, which is the point of this assertion.
+  ok('2 taps → totalWorkMs = 9h span less the 30m configured lunch',
+     a.totalWorkMs === 8.5 * 3600e3, `got ${a.totalWorkMs}`);
 
   await reset();
   await tap('09:30'); await tap('13:00'); await tap('14:00'); await tap('18:30');

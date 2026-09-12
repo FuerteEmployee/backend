@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Tracking = require('../models/Tracking');
 const User = require('../models/User');
 const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
+const { evaluateEmployee } = require('../utils/geofence_engine');
 
 // A device is only ever trusted to report its own position — employeeId
 // comes from the authenticated token, never the request body (the body used
@@ -31,6 +32,122 @@ exports.updateLocation = async (req, res) => {
             timestamp: new Date()
         });
         res.status(201).json(tracking);
+
+        // Fire-and-forget, same as the batch endpoint. Without this, auto
+        // punch-out only ever fires for the native Android tracker (which
+        // posts to /update/batch) and never for anyone on the browser or PWA
+        // uploader, which still posts single fixes here.
+        evaluateEmployee({ adminId: req.adminId, employeeId })
+            .catch((e) => console.error('[tracking] geofence evaluation failed:', e.message));
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+/**
+ * POST /api/tracking/update/batch
+ *
+ * Bulk ingest from the native background tracker, which queues fixes in a local
+ * Room database and flushes them when the network returns.
+ *
+ * Two properties matter more than throughput here:
+ *
+ *  - The CLIENT'S capture time wins. `trackedAt` is when the phone actually
+ *    recorded the position. Stamping receive time would collapse a six-hour
+ *    offline backlog onto the single instant the signal came back -- the exact
+ *    failure the eSSL terminals had, and worse here, because the geofence
+ *    engine would read that burst as a long stationary dwell.
+ *
+ *  - It is IDEMPOTENT. The syncer only deletes a row once the server has
+ *    acknowledged it, so a response lost in flight makes it resend. Duplicate
+ *    points would bias every geofence decision toward wherever the phone was
+ *    when the network flapped, so duplicates are dropped on the unique index
+ *    rather than merely discouraged.
+ */
+exports.updateLocationBatch = async (req, res) => {
+    try {
+        const employeeId = req.userId;
+        const points = Array.isArray(req.body?.points) ? req.body.points : [];
+
+        if (!points.length) return res.json({ accepted: 0, duplicates: 0, rejected: 0 });
+
+        // Bounded so a malfunctioning client cannot post an unbounded array.
+        const MAX_BATCH = 500;
+        const slice = points.slice(0, MAX_BATCH);
+
+        const now = new Date();
+        const docs = [];
+        let rejected = 0;
+
+        for (const p of slice) {
+            // Accept both naming conventions: the native syncer speaks lat/lng,
+            // the existing web client speaks latitude/longitude.
+            const lat = Number(p.latitude ?? p.lat);
+            const lng = Number(p.longitude ?? p.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) { rejected++; continue; }
+            if (lat < -90 || lat > 90 || lng < -180 || lng > 180) { rejected++; continue; }
+
+            const t = p.trackedAt || p.timestamp;
+            const captured = t ? new Date(t) : now;
+            if (Number.isNaN(captured.getTime())) { rejected++; continue; }
+            // A fix dated in the future, or older than the retention window, is
+            // a broken device clock rather than history worth keeping.
+            if (captured.getTime() > now.getTime() + 5 * 60 * 1000) { rejected++; continue; }
+            if (now.getTime() - captured.getTime() > 90 * 24 * 60 * 60 * 1000) { rejected++; continue; }
+
+            // 0 means "unreported" on every APK currently in the field, and a
+            // real GPS fix never reports 0 m uncertainty.
+            const accN = Number(p.accuracy);
+            const accuracy = Number.isFinite(accN) && accN > 0 ? accN : null;
+
+            const speedN = Number(p.speed);
+            const battN = Number(p.batteryLevel);
+
+            docs.push({
+                adminId: req.adminId,
+                employeeId,
+                latitude: lat,
+                longitude: lng,
+                accuracy,
+                timestamp: captured,
+                receivedAt: now,
+                speed: Number.isFinite(speedN) && speedN >= 0 ? speedN : null,
+                batteryLevel: Number.isFinite(battN) ? Math.max(0, Math.min(100, battN)) : null,
+                activityType: typeof p.activityType === 'string' ? p.activityType : null,
+                sessionId: typeof p.sessionId === 'string' && p.sessionId ? p.sessionId : null,
+                source: p.source === 'ping' ? 'ping' : 'background',
+            });
+        }
+
+        let accepted = 0;
+        let duplicates = 0;
+
+        if (docs.length) {
+            try {
+                const inserted = await Tracking.insertMany(docs, { ordered: false });
+                accepted = inserted.length;
+            } catch (err) {
+                // ordered:false keeps going past duplicates; the error carries
+                // what did land. A duplicate is a SUCCESS from the client's
+                // point of view -- the point is stored -- so it must be
+                // acknowledged, or the syncer retries it forever.
+                accepted = err?.result?.nInserted ?? err?.insertedDocs?.length ?? 0;
+                duplicates = docs.length - accepted;
+                const dupOnly = (err?.writeErrors || []).every((e) => e?.err?.code === 11000 || e?.code === 11000);
+                if (!dupOnly && !err?.writeErrors?.length) throw err;
+            }
+        }
+
+        // Acknowledge FIRST, then decide. The employee's phone is waiting on
+        // this response to clear its queue, and a slow geofence evaluation must
+        // not hold that open or make a working upload look like a failure.
+        res.json({ accepted, duplicates, rejected: rejected + (slice.length - docs.length - rejected) });
+
+        // Fire-and-forget: a decision failure must never surface as an upload error.
+        if (accepted > 0) {
+            evaluateEmployee({ adminId: req.adminId, employeeId })
+                .catch((e) => console.error('[tracking] geofence evaluation failed:', e.message));
+        }
     } catch (error) {
         res.status(400).json({ message: error.message });
     }

@@ -85,32 +85,50 @@ function isDayOpen(attendance) {
  * separately). Without the clamp, an early punch-in inflates a day to Full Day
  * on time nobody asked them to work.
  */
+function shiftWindow(attendance, shift, sessions) {
+    const ref = attendance?.date
+        ? new Date(attendance.date)
+        : new Date(sessions?.[0]?.punchIn || Date.now());
+
+    const startMs = shiftTimeOnDate(shift?.startTime, ref);
+    let endMs = shiftTimeOnDate(shift?.endTime, ref);
+    // Overnight shift (22:00–06:00): the end belongs to the next day.
+    if (startMs !== null && endMs !== null && endMs <= startMs) endMs += DAY_MS;
+    return { startMs, endMs };
+}
+
+/**
+ * Gross worked ms for ONE session, clamped to the shift window.
+ *
+ * Lunch is deliberately NOT deducted here. It is a day-level deduction, and
+ * charging it to one arbitrary session would make the per-session figures stop
+ * summing to anything an admin could check. So sessions read gross and the day
+ * total reads net -- and the gap between them is exactly the lunch line shown
+ * beside them.
+ */
+function computeSessionWorkMs(session, attendance, shift) {
+    if (!session?.punchIn || !session?.punchOut) return null;
+    const { startMs, endMs } = shiftWindow(attendance, shift, allSessions(attendance));
+
+    let inMs = new Date(session.punchIn).getTime();
+    let outMs = new Date(session.punchOut).getTime();
+    if (Number.isNaN(inMs) || Number.isNaN(outMs)) return null;
+    if (outMs < inMs) outMs += DAY_MS; // ran past midnight
+    if (startMs !== null) inMs = Math.max(inMs, startMs);
+    if (endMs !== null) outMs = Math.min(outMs, endMs);
+    return Math.max(0, outMs - inMs);
+}
+
 function computeWorkedMs(attendance, shift, settings) {
     const sessions = allSessions(attendance);
     if (sessions.length === 0) return 0;
 
-    const ref = attendance?.date ? new Date(attendance.date) : new Date(sessions[0].punchIn);
-
-    const shiftStartMs = shiftTimeOnDate(shift?.startTime, ref);
-    let shiftEndMs = shiftTimeOnDate(shift?.endTime, ref);
-    // Overnight shift (22:00–06:00): the end belongs to the next day.
-    if (shiftStartMs !== null && shiftEndMs !== null && shiftEndMs <= shiftStartMs) {
-        shiftEndMs += DAY_MS;
-    }
-
     let totalMs = 0;
     for (const s of sessions) {
-        if (!s.punchIn || !s.punchOut) continue;
-        let inMs = new Date(s.punchIn).getTime();
-        let outMs = new Date(s.punchOut).getTime();
-        if (Number.isNaN(inMs) || Number.isNaN(outMs)) continue;
-        if (outMs < inMs) outMs += DAY_MS; // ran past midnight
-        if (shiftStartMs !== null) inMs = Math.max(inMs, shiftStartMs);
-        if (shiftEndMs !== null) outMs = Math.min(outMs, shiftEndMs);
-        totalMs += Math.max(0, outMs - inMs);
+        totalMs += computeSessionWorkMs(s, attendance, shift) || 0;
     }
 
-    return Math.max(0, totalMs - lunchDeductionMs(attendance, settings));
+    return Math.max(0, totalMs - lunchDeductionMs(attendance, settings, shift));
 }
 
 /**
@@ -120,7 +138,7 @@ function computeWorkedMs(attendance, shift, settings) {
  * the reference's rule and it is deliberate: the break is scheduled whether or
  * not it is taken in full. A longer one costs its full actual length.
  */
-function lunchDeductionMs(attendance, settings) {
+function lunchDeductionMs(attendance, settings, shift) {
     const cfg = settings?.attendance || {};
     if (cfg.halfDayRules && cfg.halfDayRules.deductLunch === false) return 0;
 
@@ -130,6 +148,27 @@ function lunchDeductionMs(attendance, settings) {
 
     const configuredMs = Number(cfg.minLunch) > 0 ? Number(cfg.minLunch) * 60 * 1000 : 0;
     if (!configuredMs) return punchedMs;
+
+    // The tenant-wide minimum cannot apply to a shift too short to contain it.
+    //
+    // Without this, a 20-minute relief shift under a company-wide 60-minute
+    // lunch deducted the full hour from a 20-minute day: worked time came out
+    // as zero and the employee was graded ABSENT having worked their entire
+    // shift, every time, with nothing in the record explaining why.
+    //
+    // requiredWorkMs() already recognises this misconfiguration and floors the
+    // bar; the deduction has to recognise it too, or the two disagree and the
+    // bar becomes unreachable by construction. A break longer than the shift
+    // that contains it is not a break -- fall back to whatever was actually
+    // punched, which is normally nothing.
+    const ref = attendance?.date ? new Date(attendance.date) : new Date();
+    const startMs = shiftTimeOnDate(shift?.startTime, ref);
+    let endMs = shiftTimeOnDate(shift?.endTime, ref);
+    if (startMs !== null && endMs !== null) {
+        if (endMs <= startMs) endMs += DAY_MS;
+        if (configuredMs >= endMs - startMs) return punchedMs;
+    }
+
     return Math.max(punchedMs, configuredMs);
 }
 
@@ -191,6 +230,8 @@ module.exports = {
     openSessionIndex,
     isDayOpen,
     computeWorkedMs,
+    computeSessionWorkMs,
+    shiftWindow,
     lunchDeductionMs,
     requiredWorkMs,
     gradeDay,

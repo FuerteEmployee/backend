@@ -56,6 +56,20 @@ const UserSchema = new mongoose.Schema({
         remotePunch: { type: Boolean, default: true }
     },
 
+    // Never auto punch this employee out for leaving the branch.
+    //
+    // An EXPLICIT flag, because the alternative -- inferring "this person works
+    // outdoors" from a job title -- cannot work here: there is no job-title
+    // field on this schema at all, so any such text match silently evaluates
+    // against undefined and exempts nobody. The consequence of getting it wrong
+    // is the worst failure this feature has: a salesperson punched out the
+    // moment they arrive at a customer, every single day.
+    //
+    // Department name is still consulted as a convenience (see isFieldRole in
+    // utils/geofence_window.js), but this flag is the reliable mechanism and
+    // the only one an admin can set deliberately.
+    geofenceExempt: { type: Boolean, default: false },
+
     // Additional Personal Details
     gender: { type: String, enum: ['male', 'female', 'other'] },
     dob: { type: Date },

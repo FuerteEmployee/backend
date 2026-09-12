@@ -9,7 +9,7 @@ const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance, PUNCH_MAX_ACCURACY_M } = require('../utils/distance');
-const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs } = require('../utils/shift_status');
+const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs, computeSessionWorkMs } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, applyPunchRounding } = require('../utils/attendance_helpers');
 
@@ -18,7 +18,19 @@ async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     try {
         const result = await cloudinary.uploader.upload(dataUrl, {
             folder: folder,
-            resource_type: 'auto'
+            resource_type: 'auto',
+            // Backstop, not the primary fix -- the client already downsamples
+            // and compresses a punch selfie before it ever leaves the phone
+            // (see captureScannerPhoto in routes/user/index.tsx). This exists
+            // for whatever the client does NOT control: an old cached APK
+            // build a device hasn't picked up the OTA update for yet, or any
+            // future capture path that forgets to shrink its own image.
+            // `limit` only ever shrinks -- an image already under 480px on
+            // its long edge is left alone, never upscaled. `quality: auto`
+            // lets Cloudinary pick the smallest size that still looks right
+            // for a face, rather than a fixed number that is a compromise for
+            // every photo.
+            transformation: [{ width: 480, height: 480, crop: 'limit', quality: 'auto', fetch_format: 'auto' }],
         });
         return result.secure_url;
     } catch (error) {
@@ -66,6 +78,74 @@ function fixQuality(accuracy, fixAt) {
         accuracy: Number.isFinite(acc) && acc > 0 ? acc : null,
         fixAt: at && !Number.isNaN(at.getTime()) ? at : null,
     };
+}
+
+/**
+ * Resolve which channel a punch came from, for storage.
+ *
+ * One definition, used for BOTH `Attendance.source` and the per-session
+ * `punchInSource`/`punchOutSource`. Duplicating the ternary is how hardware
+ * punches ended up tagged as the camera last time -- a new channel that forgets
+ * to set `deviceSource` must be a visible omission, not a silent fallback in
+ * three different places.
+ */
+function punchSource(req) {
+    if (!req?.isDevicePunch) return 'app';
+    return req.deviceSource || 'lens';
+}
+
+/**
+ * The fields describing ONE end of a session -- where it happened, how good the
+ * fix was, how far from the branch, and which channel reported it.
+ *
+ * `end` is 'punchIn' or 'punchOut'. Returned as a flat object so it can be
+ * spread straight onto a session sub-document; the keys deliberately match the
+ * root punch field names so the two layouts stay readable side by side.
+ */
+function sessionEndFields(end, { req, address, location, accuracy, distance }) {
+    const fix = fixQuality(accuracy, null);
+    return {
+        [`${end}Source`]: punchSource(req),
+        [`${end}Location`]: address || null,
+        [`${end}Coordinates`]: location || null,
+        [`${end}Accuracy`]: fix.accuracy,
+        [`${end}Distance`]: Number.isFinite(Number(distance)) ? Number(distance) : null,
+    };
+}
+
+/**
+ * Distance to the nearest fenced branch, and whether this punch must be refused.
+ *
+ * ONE implementation for every session of the day. The second punch-in used to
+ * skip this check completely: a fence could be walked straight through by
+ * punching out and back in, and session 2+ recorded no distance at all, which
+ * left the detail view with nothing to show for it.
+ *
+ * Distance is computed whether or not the fence is enforced -- it is evidence.
+ * `requireLocation` governs only the refusal.
+ */
+function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch }) {
+    const branches = [user?.branchId, ...(user?.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
+    const fallback = settings?.attendance?.officeRadius || 3000;
+
+    if (!isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
+        const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, fallback);
+        const rounded = Number.isFinite(distance) ? Math.round(distance) : null;
+        const maxRadius = radius || fallback;
+        if (rules.requireLocation && Number.isFinite(distance) && distance > maxRadius) {
+            return {
+                distance: rounded,
+                reject: { message: `You Are Not At Office Location (Distance: ${rounded}m)`, distance: rounded },
+            };
+        }
+        return { distance: rounded, reject: null };
+    }
+
+    if (!isWFH && !isDevicePunch && rules.requireLocation && branches.length === 0) {
+        return { distance: null, reject: { message: 'No branch assigned. Cannot verify location.' } };
+    }
+
+    return { distance: null, reject: null };
 }
 
 function getAttendanceRules(user, settings) {
@@ -161,6 +241,10 @@ exports.punchIn = async (req, res) => {
                 });
             }
 
+            // The fence applies to EVERY session, not just the first one.
+            const reGeo = evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch: req.isDevicePunch });
+            if (reGeo.reject) return res.status(400).json(reGeo.reject);
+
             // Perform multiple punch in
             const photoUrl = photo ? await uploadToCloudinary(photo) : null;
             attendance.punchOut = null;
@@ -170,7 +254,12 @@ exports.punchIn = async (req, res) => {
             attendance.punchOutIsProvisional = false;
 
             attendance.shifts = attendance.shifts || [];
-            attendance.shifts.push({ punchIn: punchInTime });
+            attendance.shifts.push({
+                punchIn: punchInTime,
+                ...sessionEndFields('punchIn', {
+                    req, address, location, accuracy, distance: reGeo.distance,
+                }),
+            });
             
             if (!attendance.remarks?.includes('Multiple shifts')) {
                 attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Multiple shifts';
@@ -205,22 +294,9 @@ exports.punchIn = async (req, res) => {
         // 4. Geofencing — compute distance to nearest branch whenever we can
         // (persisted below regardless of enforcement), but only HARD-REJECT
         // the punch when requireLocation is actually turned on for this user.
-        const branches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
-        let punchInDistance = null;
-        if (!isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
-            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, settings?.attendance?.officeRadius || 3000);
-            if (Number.isFinite(distance)) punchInDistance = Math.round(distance);
-
-            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
-            if (rules.requireLocation && distance > maxRadius) {
-                return res.status(400).json({
-                    message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)`,
-                    distance: Math.round(distance)
-                });
-            }
-        } else if (!isWFH && !req.isDevicePunch && rules.requireLocation && branches.length === 0) {
-            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-        }
+        const geo = evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch: req.isDevicePunch });
+        if (geo.reject) return res.status(400).json(geo.reject);
+        const punchInDistance = geo.distance;
 
         // 4. Determine Status (Late Check & Shift-specific Half Day check)
         let status = 'present';
@@ -264,17 +340,36 @@ exports.punchIn = async (req, res) => {
             // Device punches carry `deviceSource` to say WHICH device: the
             // iclock/ADMS controller sets 'biometric', the BOTLens camera route
             // leaves it unset and falls back to 'lens'.
-            source: req.isDevicePunch ? (req.deviceSource || 'lens') : 'app',
+            source: punchSource(req),
             isWFH: !!isWFH,
             remarks: isWFH ? 'Work From Home' : '',
             punchOut: null,
             lunchInTime: null,
             lunchOutTime: null,
-            shifts: [{ punchIn: punchInTime }],
+            shifts: [{
+                punchIn: punchInTime,
+                ...sessionEndFields('punchIn', {
+                    req, address, location, accuracy, distance: punchInDistance,
+                }),
+            }],
+            geoStatus: punchInDistance == null ? 'unknown' : 'inside_geofence',
+            autoPunchOut: false,
+            autoPunchOutReason: null,
+            calculatedDistance: null,
             totalWorkMs: 0
         });
 
         await attendance.save();
+
+        // The FIRST punch-in of the day had no evidence row -- the logger was
+        // wired only into the re-punch branch below and into punch-out, so a
+        // normal one-session day produced a log that began at going-home time.
+        logAttendanceEvent({
+            adminId: req.adminId, employeeId, type: 'punch-in', at: punchInTime,
+            source: punchSource(req), sessionNumber: 1,
+            lat: location?.lat, lng: location?.lng, accuracy,
+            distanceFromBranch: punchInDistance,
+        });
 
         // Get month stats for feedback
         const summary = await getEmployeeSummary(req.adminId, employeeId);
@@ -284,6 +379,47 @@ exports.punchIn = async (req, res) => {
             attendance,
             summary
         });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+/**
+ * GET /api/attendance/today
+ *
+ * The authenticated employee's own attendance for today, or null.
+ *
+ * Small, unglamorous, and load-bearing: this is what the native background
+ * tracker polls to decide whether it should still be running. Without it the
+ * service has no way to learn that the employee punched out on the BIOMETRIC
+ * TERMINAL or the LENS CAMERA -- neither of which the phone ever hears about --
+ * and would keep recording, and keep its notification up, until the battery
+ * died. The reference project never had to solve this because it has one punch
+ * channel; we have three.
+ *
+ * Returns `null` rather than 404 when there is no record: "not punched in" is a
+ * normal answer, and the tracker treats a failed request as "keep running", so
+ * an error here would be read as "carry on" -- the exact opposite of the truth.
+ */
+exports.getToday = async (req, res) => {
+    try {
+        const attendance = await Attendance.findOne({
+            adminId: new mongoose.Types.ObjectId(req.adminId),
+            employeeId: new mongoose.Types.ObjectId(req.userId),
+            date: { $gte: istStartOfDay(), $lte: istEndOfDay() },
+        })
+            .select('date punchIn punchOut lunchInTime lunchOutTime shifts status totalWorkMs punchOutIsProvisional autoPunchOut autoPunchOutReason')
+            .lean();
+
+        // A provisional punch-out is a device toggle that may only be someone
+        // leaving for lunch, so the day is NOT closed and tracking must
+        // continue. Reporting it as a real punch-out would stop the tracker
+        // half way through an afternoon.
+        if (attendance && attendance.punchOut && attendance.punchOutIsProvisional) {
+            attendance.punchOut = null;
+        }
+
+        res.json(attendance || null);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -373,19 +509,12 @@ exports.punchOut = async (req, res) => {
         // stored and fed into worked-hours/half-day/payroll math.
         const punchOutTime = applyPunchRounding(now, 'Punch Out', settings);
 
-        const branches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
-        let punchOutDistance = null;
-        if (!attendance.isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
-            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, settings?.attendance?.officeRadius || 3000);
-            if (Number.isFinite(distance)) punchOutDistance = Math.round(distance);
-
-            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
-            if (rules.requireLocation && distance > maxRadius) {
-                return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
-            }
-        } else if (!attendance.isWFH && !req.isDevicePunch && rules.requireLocation && branches.length === 0) {
-            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-        }
+        const outGeo = evaluateGeofence({
+            user, settings, rules, location,
+            isWFH: attendance.isWFH, isDevicePunch: req.isDevicePunch,
+        });
+        if (outGeo.reject) return res.status(400).json(outGeo.reject);
+        const punchOutDistance = outGeo.distance;
 
         const photoUrl = photo ? await uploadToCloudinary(photo) : null;
 
@@ -414,6 +543,9 @@ exports.punchOut = async (req, res) => {
                 // job is different again -- without this they are
                 // indistinguishable after the fact.
                 lastShift.closeReason = req.isDevicePunch ? 'device' : 'manual';
+                Object.assign(lastShift, sessionEndFields('punchOut', {
+                    req, address, location, accuracy, distance: punchOutDistance,
+                }));
             }
         }
 
@@ -425,6 +557,13 @@ exports.punchOut = async (req, res) => {
         // rather than overtime, and never subtracted lunch -- so a day could
         // exceed the shift length and still be graded on that inflated figure.
         attendance.totalWorkMs = computeWorkedMs(attendance, user.shiftId, settings);
+
+        // Per-session durations, recomputed for every session on each close so
+        // an earlier session written before this field existed, or one an admin
+        // has since corrected, is brought up to date too.
+        for (const sess of (attendance.shifts || [])) {
+            sess.workMs = computeSessionWorkMs(sess, attendance, user.shiftId);
+        }
 
         // 5. Preserve punctuality signal before status is normalised.
         // status 'late' or 'half-day' (if due to punch-in) gets overwritten below,
@@ -498,7 +637,7 @@ exports.lunchIn = async (req, res) => {
         if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
 
         const employeeId = req.body.employeeId || req.userId;
-        const { location, address } = req.body;
+        const { location, address, accuracy } = req.body;
         const todayStart = istStartOfDay();
         const todayEnd = istEndOfDay();
 
@@ -532,19 +671,13 @@ exports.lunchIn = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        const lunchInBranches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
-        let lunchInDistance = null;
-        if (attendance.remarks !== 'Work From Home' && lunchInBranches.length > 0 && location?.lat != null && location?.lng != null) {
-            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, lunchInBranches, settings?.attendance?.officeRadius || 3000);
-            if (Number.isFinite(distance)) lunchInDistance = Math.round(distance);
-
-            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
-            if (rules.requireLocation && distance > maxRadius) {
-                return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
-            }
-        } else if (!req.isDevicePunch && rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchInBranches.length === 0) {
-            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-        }
+        const lunchInGeo = evaluateGeofence({
+            user, settings, rules, location,
+            isWFH: attendance.isWFH || attendance.remarks === 'Work From Home',
+            isDevicePunch: req.isDevicePunch,
+        });
+        if (lunchInGeo.reject) return res.status(400).json(lunchInGeo.reject);
+        const lunchInDistance = lunchInGeo.distance;
 
         if (attendance.lunchOutTime) {
             return res.status(400).json({ message: 'Lunch already completed for today' });
@@ -555,6 +688,16 @@ exports.lunchIn = async (req, res) => {
         attendance.lunchInCoordinates = location || null;
         attendance.lunchInDistance = lunchInDistance;
         await attendance.save();
+
+        // Lunch had no evidence row on any channel -- so a break taken on the
+        // Lens camera left nothing behind but two timestamps on the day state,
+        // which an admin correction then silently overwrote.
+        logAttendanceEvent({
+            adminId: req.adminId, employeeId, type: 'lunch-in', at: attendance.lunchInTime,
+            source: punchSource(req), sessionNumber: Math.max(1, (attendance.shifts || []).length),
+            lat: location?.lat, lng: location?.lng, accuracy,
+            distanceFromBranch: lunchInDistance,
+        });
 
         res.json(attendance);
     } catch (error) {
@@ -568,7 +711,7 @@ exports.lunchOut = async (req, res) => {
         if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
 
         const employeeId = req.body.employeeId || req.userId;
-        const { location, address } = req.body;
+        const { location, address, accuracy } = req.body;
         const todayStart = istStartOfDay();
         const todayEnd = istEndOfDay();
 
@@ -617,25 +760,29 @@ exports.lunchOut = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        const lunchOutBranches = [user.branchId, ...(user.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
-        let lunchOutDistance = null;
-        if (attendance.remarks !== 'Work From Home' && lunchOutBranches.length > 0 && location?.lat != null && location?.lng != null) {
-            const { distance, radius } = nearestBranchDistance(location.lat, location.lng, lunchOutBranches, settings?.attendance?.officeRadius || 3000);
-            if (Number.isFinite(distance)) lunchOutDistance = Math.round(distance);
-
-            const maxRadius = radius || settings?.attendance?.officeRadius || 3000;
-            if (rules.requireLocation && distance > maxRadius) {
-                return res.status(400).json({ message: `You Are Not At Office Location (Distance: ${Math.round(distance)}m)` });
-            }
-        } else if (!req.isDevicePunch && rules.requireLocation && attendance.remarks !== 'Work From Home' && lunchOutBranches.length === 0) {
-            return res.status(400).json({ message: 'No branch assigned. Cannot verify location.' });
-        }
+        const lunchOutGeo = evaluateGeofence({
+            user, settings, rules, location,
+            isWFH: attendance.isWFH || attendance.remarks === 'Work From Home',
+            isDevicePunch: req.isDevicePunch,
+        });
+        if (lunchOutGeo.reject) return res.status(400).json(lunchOutGeo.reject);
+        const lunchOutDistance = lunchOutGeo.distance;
 
         attendance.lunchOutTime = applyPunchRounding(new Date(), 'Lunch Out', settings);
         attendance.lunchOutLocation = address || "Location provided by user";
         attendance.lunchOutCoordinates = location || null;
         attendance.lunchOutDistance = lunchOutDistance;
         await attendance.save();
+
+        // Lunch had no evidence row on any channel -- so a break taken on the
+        // Lens camera left nothing behind but two timestamps on the day state,
+        // which an admin correction then silently overwrote.
+        logAttendanceEvent({
+            adminId: req.adminId, employeeId, type: 'lunch-out', at: attendance.lunchOutTime,
+            source: punchSource(req), sessionNumber: Math.max(1, (attendance.shifts || []).length),
+            lat: location?.lat, lng: location?.lng, accuracy,
+            distanceFromBranch: lunchOutDistance,
+        });
 
         res.json(attendance);
     } catch (error) {

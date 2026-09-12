@@ -57,6 +57,32 @@ const AttendanceSchema = new mongoose.Schema({
             enum: [null, 'manual', 'auto_geofence', 'shift_end', 'admin', 'device'],
             default: null,
         },
+        // Where and how each END of the session happened, mirroring the root
+        // punch fields. Session 2+ used to carry nothing but two timestamps, so
+        // a day where someone punched in on their phone at the warehouse and
+        // out on the terminal at head office was indistinguishable from one
+        // where they never moved -- and an auto punch-out could not be shown
+        // the distance that triggered it.
+        //
+        // `source` is per END, not per session, because that is the real
+        // granularity: the whole point of this system is that the three
+        // channels interleave freely within one session.
+        punchInSource: { type: String, enum: ['app', 'lens', 'biometric', 'system', 'admin'], default: null },
+        punchOutSource: { type: String, enum: ['app', 'lens', 'biometric', 'system', 'admin'], default: null },
+        punchInLocation: { type: String, default: null },
+        punchOutLocation: { type: String, default: null },
+        punchInCoordinates: { lat: { type: Number }, lng: { type: Number } },
+        punchOutCoordinates: { lat: { type: Number }, lng: { type: Number } },
+        punchInAccuracy: { type: Number, default: null },
+        punchOutAccuracy: { type: Number, default: null },
+        punchInDistance: { type: Number, default: null },
+        punchOutDistance: { type: Number, default: null },
+        // Net worked ms for THIS session, clamped to the shift window by
+        // computeWorkedMs(). Stored per session so the UI can show a per-row
+        // duration without re-deriving the shift clamp in the browser -- the
+        // reference showed raw out-minus-in there, which disagreed with the
+        // day total whenever a session ran outside the shift.
+        workMs: { type: Number, default: null },
     }],
     // True when the current `punchOut` was set by a device (Lens/biometric)
     // tap, not an explicit app punch-out. Devices only ever send a generic
@@ -87,6 +113,26 @@ const AttendanceSchema = new mongoose.Schema({
     // from a deliberate one, and someone who punches in on their phone and out
     // on the terminal would lose their real start time.
     derivedFields: { type: [String], default: [] },
+
+    // ── Geofence outcome for the day ────────────────────────────────────────
+    // True when a session was closed by the geofence engine rather than by the
+    // employee. Kept at day level as well as on the session's closeReason so a
+    // list view can flag the day without loading every session.
+    autoPunchOut: { type: Boolean, default: false },
+    // Plain-language account of WHY, written by the engine at decision time.
+    // A punch-out the employee did not make has to be explainable, not merely
+    // asserted -- this is the sentence the admin and the employee both read.
+    autoPunchOutReason: { type: String, default: null },
+    // Metres from the branch on the fix that DECIDED the auto punch-out. Not
+    // recomputed on read: the branch may since have been moved or deleted, and
+    // an audit has to show the number the decision actually used.
+    calculatedDistance: { type: Number, default: null },
+    geoStatus: {
+        type: String,
+        enum: [null, 'inside_geofence', 'outside_geofence', 'auto_exit', 'unknown'],
+        default: null,
+    },
+
     remarks: { type: String, default: null }
 }, { timestamps: true });
 

@@ -41,7 +41,41 @@ const ClientDeviceSchema = new mongoose.Schema({
         coarseLocation: permission(),
         camera: permission(),
         notifications: permission(),
+
+        // ── Background-tracking readiness ───────────────────────────────────
+        // Every one of these must hold or location stops the moment the screen
+        // locks -- which is exactly when it is needed. They are stored
+        // separately because each has a DIFFERENT fix, and an admin answering
+        // "my BOT isn't working" needs to know which screen to send the
+        // employee to, not merely that something is wrong.
+
+        // "Allow all the time" rather than "While using the app". Without it
+        // Android revokes location seconds after the screen goes off.
+        backgroundLocation: permission(),
+        // Android 12+ lets a user grant location as "Approximate", which
+        // reports as GRANTED while returning kilometre-fuzzed coordinates. A
+        // geofence built on that is meaningless, so it is tracked apart from
+        // the plain grant.
+        preciseLocation: permission(),
+        // Battery optimisation exemption. With it on, the OS freezes the
+        // service after a few minutes of screen-off.
+        batteryUnrestricted: permission(),
+        // OEM auto-start whitelist (MIUI, ColorOS, Funtouch, One UI). NOTE:
+        // there is no API that can READ this -- no public one exists -- so a
+        // 'granted' here is the EMPLOYEE'S OWN CLAIM after being sent to the
+        // settings screen, not a verified fact. Treat it as the weakest signal
+        // on this document and never as proof.
+        autoStart: permission(),
     },
+
+    // True once the employee completed the first-run setup gate with every
+    // required item satisfied. Stored rather than derived so support can see
+    // that setup was finished at some point even if a permission has since been
+    // revoked -- "never set up" and "set up then broken" need different help.
+    trackingSetupComplete: { type: Boolean, default: false },
+    trackingSetupCompletedAt: { type: Date, default: null },
+    // Phone maker, so support can name the right OEM screen without asking.
+    oemHint: { type: String, default: null },
 
     appOpenCount: { type: Number, default: 0 },
     firstSeenAt: { type: Date, default: Date.now },

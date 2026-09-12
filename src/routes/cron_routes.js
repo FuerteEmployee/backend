@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { runSubscriptionLifecycle } = require('../jobs/subscription_lifecycle');
 const { runDeviceHealthCheck } = require('../jobs/device_health');
+const { closeForgottenPunches } = require('../jobs/attendance_close');
 
 // Guard cron endpoints with a shared secret so only the scheduler (Vercel Cron,
 // an external uptime trigger, or an authorised operator) can run them.
@@ -33,6 +34,22 @@ const runLifecycle = async (req, res) => {
 
 router.post('/subscriptions', requireCronSecret, runLifecycle);
 router.get('/subscriptions', requireCronSecret, runLifecycle);
+
+// Close sessions nobody punched out of. Same dual wiring as the jobs above:
+// node-cron on a long-running host, this endpoint on serverless.
+// ?dryRun=1 reports what WOULD close without touching anything -- worth using
+// the first time it runs against a tenant's real data.
+const runClose = async (req, res) => {
+    try {
+        const summary = await closeForgottenPunches({ dryRun: req.query.dryRun === '1' });
+        res.json({ ok: true, summary });
+    } catch (error) {
+        res.status(500).json({ ok: false, message: error.message });
+    }
+};
+
+router.post('/close-punches', requireCronSecret, runClose);
+router.get('/close-punches', requireCronSecret, runClose);
 
 // Flag biometric terminals that have stopped reporting. Registered here as well
 // as in jobs/scheduler.js because on serverless there is no persistent process
