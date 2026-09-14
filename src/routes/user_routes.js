@@ -29,7 +29,7 @@ router.post('/verify-otp', verifyOtp); // Verify OTP and receive JWT token
 router.post('/logout', protect, logout); // Record a logout in the access log + clear activeToken (not subscription-gated)
 router.get('/profile', protect, getProfile); // Get currently logged-in user details
 router.get('/subscription', protect, getMySubscription); // Get current tenant subscription/trial status (not subscription-gated)
-router.post('/verify-add-employee', protect, verifyBotlensCredentials); // Re-confirm admin identity before BOTLens adds an employee (not subscription-gated)
+// router.post('/verify-add-employee', protect, verifyBotlensCredentials); // Re-confirm admin identity before BOTLens adds an employee (not subscription-gated) — BOTLens integration disabled
 router.put('/profile', protect, uploadIdDocument.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'panCard', maxCount: 2 },

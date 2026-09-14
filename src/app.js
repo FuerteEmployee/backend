@@ -16,12 +16,12 @@ const allowedOrigins = [
     "http://localhost:4173",
     "https://api.beontimeofficial.com",
 
-    // BOTLens (camera attendance app) — local dev and the live deployment
-    "http://localhost:8000",
-    "https://localhost:8000",
-    "http://localhost:10000",
-    "https://localhost:10000",
-    "https://botlens.beontimeofficial.com",
+    // BOTLens (camera attendance app) — integration disabled, origins closed off
+    // "http://localhost:8000",
+    // "https://localhost:8000",
+    // "http://localhost:10000",
+    // "https://localhost:10000",
+    // "https://botlens.beontimeofficial.com",
 
     // Capacitor native apps (Android/iOS WebView origins)
     "https://localhost",
@@ -46,7 +46,7 @@ app.use("/api/users", require("./routes/user_routes"));
 app.use("/api/departments", require("./routes/department_routes"));
 app.use("/api/branches", require("./routes/branch_routes"));
 app.use("/api/attendance", require("./routes/attendance_routes"));
-app.use("/api/device/attendance", require("./routes/device_attendance_routes"));
+// app.use("/api/device/attendance", require("./routes/device_attendance_routes"));
 // Company-admin view of their own biometric machines (read + rename only).
 app.use("/api/devices", require("./routes/device_routes"));
 // Biometric devices (eSSL/ZKTeco ADMS protocol) hit /iclock/* directly at the

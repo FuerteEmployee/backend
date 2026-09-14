@@ -119,12 +119,11 @@ exports.loginRequest = async (req, res) => {
             return res.status(404).json({ message: 'You are not registered. Please contact your admin to register you first.' });
         }
 
-        // BOTLens (the camera console) is admin-only — employees mark attendance
-        // via the camera itself, they never need to log in there. Gated here
-        // server-side, keyed off an `app` flag the BOTLens client sends, so the
+        // BOTLens integration is disabled — no login is allowed through the
+        // BOTLens client at all, keyed off the `app` flag it sends, so the
         // shared login endpoint stays unrestricted for every other caller.
-        if (app === 'botlens' && user.role !== 'admin') {
-            return res.status(403).json({ message: 'Only company admins can access BOTLens. Please contact your administrator.' });
+        if (app === 'botlens') {
+            return res.status(403).json({ message: 'BOTLens is currently disabled.' });
         }
 
         if (user.status === 'inactive') {
@@ -159,10 +158,10 @@ exports.verifyOtp = async (req, res) => {
         }
 
         // Re-checked here (not just at login-request) so an OTP issued via
-        // another app's login flow can't be replayed against BOTLens for a
-        // non-admin phone number.
-        if (app === 'botlens' && user.role !== 'admin') {
-            return res.status(403).json({ message: 'Only company admins can access BOTLens. Please contact your administrator.' });
+        // another app's login flow can't be replayed against BOTLens.
+        // BOTLens integration is disabled — no login allowed regardless of role.
+        if (app === 'botlens') {
+            return res.status(403).json({ message: 'BOTLens is currently disabled.' });
         }
 
         if (user.status === 'inactive') {
