@@ -1,7 +1,7 @@
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Settings = require('../models/Settings');
-const { istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
+const { istStartOfDay, istEndOfDay, istDateKey, shiftTimeOnDate } = require('../utils/attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, gradeDay, openSessionIndex } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 
@@ -30,13 +30,11 @@ const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 /** Minutes of grace past shift end before a forgotten day is closed. */
 const CLOSE_GRACE_MIN = Number(process.env.CLOSE_GRACE_MINUTES) || 0;
 
-/** Resolve "HH:mm" against a given day. */
+/** Resolve "HH:mm" (IST) against a given IST day, plus the configured grace. */
 function shiftEndOn(date, hhmm) {
-    const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
-    if (!m) return null;
-    const d = new Date(date);
-    d.setHours(Number(m[1]), Number(m[2]) + CLOSE_GRACE_MIN, 0, 0);
-    return d;
+    const base = shiftTimeOnDate(hhmm, date);
+    if (!base) return null;
+    return new Date(base.getTime() + CLOSE_GRACE_MIN * 60 * 1000);
 }
 
 /**

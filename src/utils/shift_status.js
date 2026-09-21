@@ -19,26 +19,24 @@
 //     the single place that knows it.
 // ─────────────────────────────────────────────────────────────────────────────
 
+const { shiftTimeOnDate: istShiftTimeOnDate } = require('./attendance_helpers');
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Maximum sessions in one day: session 1 plus four more. */
 const MAX_SESSIONS = Number(process.env.MAX_DAILY_SESSIONS) || 5;
 
 /**
- * Resolve an "HH:mm" shift time against the day a punch happened on.
- *
- * Anchored to the punch's own date rather than "today", so re-grading an old
- * day (an admin correction, a late offline flush) resolves the shift window on
- * the correct date instead of silently comparing against the current one.
+ * Resolve an "HH:mm" shift time (IST) against the IST day a punch happened
+ * on, as epoch ms. Anchored to the punch's own date rather than "today", so
+ * re-grading an old day (an admin correction, a late offline flush) resolves
+ * the shift window on the correct date instead of silently comparing against
+ * the current one. Delegates to the shared IST-anchored helper — see its own
+ * comment for why this can't be `new Date(referenceDate); d.setHours(...)`.
  */
 function shiftTimeOnDate(hhmm, referenceDate) {
-    if (!hhmm || typeof hhmm !== 'string') return null;
-    const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
-    if (!m) return null;
-    const d = new Date(referenceDate);
-    if (Number.isNaN(d.getTime())) return null;
-    d.setHours(Number(m[1]), Number(m[2]), 0, 0);
-    return d.getTime();
+    const d = istShiftTimeOnDate(hhmm, referenceDate);
+    return d ? d.getTime() : null;
 }
 
 /**

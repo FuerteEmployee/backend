@@ -11,7 +11,7 @@ const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance, PUNCH_MAX_ACCURACY_M } = require('../utils/distance');
 const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs, computeSessionWorkMs } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
-const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, applyPunchRounding } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, applyPunchRounding, shiftTimeOnDate } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -305,9 +305,8 @@ exports.punchIn = async (req, res) => {
                 status = 'late';
             }
             if (user.shiftId.halfDayLatePunchInMin) {
-                const [sHour, sMinute] = user.shiftId.startTime.split(':').map(Number);
-                const halfDayPunchInCutoff = new Date(punchInTime);
-                halfDayPunchInCutoff.setHours(sHour, sMinute + user.shiftId.halfDayLatePunchInMin, 0, 0);
+                const shiftStart = shiftTimeOnDate(user.shiftId.startTime, punchInTime);
+                const halfDayPunchInCutoff = new Date(shiftStart.getTime() + user.shiftId.halfDayLatePunchInMin * 60 * 1000);
                 if (punchInTime > halfDayPunchInCutoff) {
                     status = 'half-day';
                 }

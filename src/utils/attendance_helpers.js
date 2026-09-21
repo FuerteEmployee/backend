@@ -96,6 +96,44 @@ const istCalendarDate = (date = new Date()) => {
 };
 
 /**
+ * Resolve a shift's "HH:mm" wall-clock time (always IST — these deployments
+ * are IST-only) to a real UTC instant, on the IST calendar day `referenceDate`
+ * falls on. Built the same way `parseDeviceTimestamp` builds a device
+ * timestamp: from IST parts via `Date.UTC` minus the IST offset, so the result
+ * is independent of the server process's own OS/system timezone.
+ *
+ * This replaces the `new Date(referenceDate); d.setHours(hh, mm, 0, 0)` pattern
+ * used to appear at every shift-boundary check in this codebase (late check,
+ * half-day cutoffs, auto-close, day grading). `setHours` reads/writes the wall
+ * clock in whatever timezone the *process* happens to be running in — correct
+ * on an IST dev machine, silently wrong by ~5:30 (and often a whole calendar
+ * day, near midnight) on a UTC cloud server. That mismatch graded real,
+ * fully-worked days as Absent in production while looking fine locally.
+ */
+const shiftTimeOnDate = (hhmm, referenceDate) => {
+  if (!hhmm || typeof hhmm !== 'string') return null;
+  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const [y, mo, d] = istDateKey(referenceDate).split('-').map(Number);
+  const utcMs = Date.UTC(y, mo - 1, d, Number(m[1]), Number(m[2]), 0, 0) - IST_OFFSET_MS;
+  return new Date(utcMs);
+};
+
+/**
+ * "HH:mm" clock arithmetic for display only (e.g. "this cutoff was 09:00 plus
+ * 30 minutes late-grace, i.e. 09:30") — pure minute math, no Date/timezone
+ * involved at all, so there's nothing here for a server timezone to get wrong.
+ */
+const clockStringAfter = (hhmm, offsetMinutes) => {
+  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return hhmm;
+  const total = (((Number(m[1]) * 60 + Number(m[2]) + offsetMinutes) % 1440) + 1440) % 1440;
+  const hh = Math.floor(total / 60);
+  const mm = total % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+};
+
+/**
  * Rounds a punch timestamp to the nearest `intervalMinutes` boundary, per
  * settings.attendance.roundingInterval/roundingDirection — e.g. a 15-minute
  * "nearest" rule turns a 09:07 punch-in into 09:00 before it feeds into the
@@ -129,11 +167,11 @@ const applyPunchRounding = (date, label, settings) => {
  */
 const isLatePunchIn = (punchInDate, shift, settings) => {
   if (!shift || !shift.startTime || !punchInDate) return false;
-  const [sHour, sMinute] = shift.startTime.split(':').map(Number);
   const graceMinutes = settings?.attendance?.lateGrace ?? 15;
 
-  const shiftTime = new Date(punchInDate);
-  shiftTime.setHours(sHour, sMinute + graceMinutes, 0, 0);
+  const shiftStart = shiftTimeOnDate(shift.startTime, punchInDate);
+  if (!shiftStart) return false;
+  const shiftTime = new Date(shiftStart.getTime() + graceMinutes * 60 * 1000);
 
   return new Date(punchInDate) > shiftTime;
 };
@@ -163,35 +201,27 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
     hasShiftRules = true;
 
     if (shift.halfDayLatePunchInMin && punchIn) {
-      const [sHour, sMinute] = shift.startTime.split(':').map(Number);
-      const halfDayPunchInCutoff = new Date(punchIn);
-      halfDayPunchInCutoff.setHours(sHour, sMinute + shift.halfDayLatePunchInMin, 0, 0);
+      const shiftStart = shiftTimeOnDate(shift.startTime, punchIn);
+      const halfDayPunchInCutoff = new Date(shiftStart.getTime() + shift.halfDayLatePunchInMin * 60 * 1000);
       if (new Date(punchIn) > halfDayPunchInCutoff) {
         isHalfDay = true;
-        const cutoffTimeStr = `${String(halfDayPunchInCutoff.getHours()).padStart(2, '0')}:${String(halfDayPunchInCutoff.getMinutes()).padStart(2, '0')}`;
+        const cutoffTimeStr = clockStringAfter(shift.startTime, shift.halfDayLatePunchInMin);
         remarkParts.push(`Late punch-in for shift (after ${cutoffTimeStr})`);
       }
     }
 
     if (shift.halfDayEarlyPunchOutMin && punchIn && punchOut) {
-      const [sHour, sMin] = shift.startTime.split(':').map(Number);
-      const [eHour, eMin] = shift.endTime.split(':').map(Number);
-
-      const shiftStart = new Date(punchIn);
-      shiftStart.setHours(sHour, sMin, 0, 0);
-
-      const shiftEnd = new Date(punchIn);
-      shiftEnd.setHours(eHour, eMin, 0, 0);
+      const shiftStart = shiftTimeOnDate(shift.startTime, punchIn);
+      let shiftEnd = shiftTimeOnDate(shift.endTime, punchIn);
       if (shiftEnd < shiftStart) {
-        shiftEnd.setDate(shiftEnd.getDate() + 1);
+        shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
       }
 
-      const halfDayPunchOutCutoff = new Date(shiftEnd);
-      halfDayPunchOutCutoff.setMinutes(halfDayPunchOutCutoff.getMinutes() - shift.halfDayEarlyPunchOutMin);
+      const halfDayPunchOutCutoff = new Date(shiftEnd.getTime() - shift.halfDayEarlyPunchOutMin * 60 * 1000);
 
       if (new Date(punchOut) < halfDayPunchOutCutoff) {
         isHalfDay = true;
-        const cutoffTimeStr = `${String(halfDayPunchOutCutoff.getHours()).padStart(2, '0')}:${String(halfDayPunchOutCutoff.getMinutes()).padStart(2, '0')}`;
+        const cutoffTimeStr = clockStringAfter(shift.endTime, -shift.halfDayEarlyPunchOutMin);
         remarkParts.push(`Early punch-out for shift (before ${cutoffTimeStr})`);
       }
     }
@@ -283,4 +313,4 @@ const parseDeviceTimestamp = (raw, now = new Date(), offsetMinutes = 0) => {
   return parsed;
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, shiftTimeOnDate, clockStringAfter, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };

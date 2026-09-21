@@ -4,7 +4,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Settings = require('../models/Settings');
 const { calculateAndSaveSalary } = require('./salary_controller');
-const { isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
+const { isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, shiftTimeOnDate } = require('../utils/attendance_helpers');
 
 exports.getRegularizations = async (req, res) => {
     try {
@@ -129,9 +129,8 @@ exports.approveRegularization = async (req, res) => {
             } else {
                 let defaultStatus = wasLate ? 'late' : 'present';
                 if (user?.shiftId && user.shiftId.halfDayLatePunchInMin) {
-                    const [sHour, sMinute] = user.shiftId.startTime.split(':').map(Number);
-                    const halfDayPunchInCutoff = new Date(attendance.punchIn);
-                    halfDayPunchInCutoff.setHours(sHour, sMinute + user.shiftId.halfDayLatePunchInMin, 0, 0);
+                    const shiftStart = shiftTimeOnDate(user.shiftId.startTime, attendance.punchIn);
+                    const halfDayPunchInCutoff = new Date(shiftStart.getTime() + user.shiftId.halfDayLatePunchInMin * 60 * 1000);
                     if (new Date(attendance.punchIn) > halfDayPunchInCutoff) {
                         defaultStatus = 'half-day';
                     }
