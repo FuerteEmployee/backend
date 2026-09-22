@@ -113,6 +113,79 @@ function rejectPoorAccuracy(accuracy) {
     return null;
 }
 
+// ─── Minimum gap between consecutive punches ─────────────────────────────────
+//
+// A segment of the day has to last long enough to be that segment. Observed
+// 2026-09-17: two employees recorded lunches of ONE SECOND (14:52:48 to
+// 14:52:49, 18:18:58 to 18:18:59) -- a double tap on "Start Lunch" then "End
+// Lunch", stored as a real break. The same double tap is available at both
+// ends of the break: punch-in then "Start Lunch", and "End Lunch" then
+// punch-out. All three feed determineHalfDayStatus and, under a from_punches
+// lunch policy, the payroll deduction.
+//
+// `punchDebounceSeconds` does not cover any of this. It guards DEVICE taps, in
+// the iclock controller, before the tap ever reaches a handler; these arrive
+// through the app, where nothing debounced them.
+//
+// Rejecting beats silently ignoring: the employee is holding the phone and
+// needs to know the action did not take, or they will believe it did.
+//
+// Kept as one helper rather than three copies. shift_status.js carries the
+// scars of the alternative -- logic duplicated across two controllers that had
+// already diverged before anyone centralised it.
+
+const DEFAULT_MIN_GAP_SECONDS = 60;
+
+/**
+ * Resolve a configured minimum gap. Unset falls back to the default; an
+ * explicit 0 disables the gate, matching how `punchDebounceSeconds` documents
+ * its own 0. Nothing is affected by that reading today: the keys were missing
+ * from the Settings schema until now, so strict mode dropped every write and
+ * no tenant has ever had a stored value to reinterpret.
+ */
+function minGapSeconds(settings, key) {
+    const raw = Number(settings?.attendance?.[key]);
+    return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_MIN_GAP_SECONDS;
+}
+
+/**
+ * @param since    the earlier punch's timestamp, or null/undefined when that
+ *                 punch never happened -- then there is nothing to measure and
+ *                 the gate does not apply
+ * @param seconds  0 or less disables
+ * @param phrase   {what, doing} -- "Lunch started 3s ago. Wait at least 60s
+ *                 before ending it."
+ * @returns a 400 body to send, or null to proceed
+ *
+ * A negative gap (the stored punch is in the future, e.g. a corrected time or
+ * device clock skew) is let through rather than blocked. This gate exists to
+ * catch a fat-fingered double tap, and it must never be the thing standing
+ * between an employee and closing their day.
+ */
+function tooSoonSince(since, seconds, phrase, now = Date.now()) {
+    if (!since || !(seconds > 0)) return null;
+    const gapMs = now - new Date(since).getTime();
+    if (gapMs < 0 || gapMs >= seconds * 1000) return null;
+    return {
+        message: `${phrase.what} ${Math.round(gapMs / 1000)}s ago. `
+            + `Wait at least ${seconds}s before ${phrase.doing}.`,
+        retryable: true,
+    };
+}
+
+/**
+ * The punch-in that opened the segment currently running.
+ *
+ * Not simply `attendance.punchIn`: sessions live in `attendance.shifts[]` and
+ * session 1 is ALSO the root punchIn, so on a second shift the root holds this
+ * morning's start and gating against it would never fire.
+ */
+function currentPunchIn(attendance) {
+    const sessions = attendance?.shifts || [];
+    const last = sessions[sessions.length - 1];
+    return last?.punchIn || attendance?.punchIn || null;
+}
+
 /**
  * Fixes worth storing alongside a punch, so a disputed punch can be judged
  * later. `fixAt` is when the DEVICE captured the position; a large gap from the
@@ -724,6 +797,18 @@ exports.punchOut = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
+        // Ending the break and immediately punching out is the third face of
+        // the same double tap. Only applies when a lunch-out was actually
+        // recorded -- a day with no break has nothing to measure from, and
+        // punch-out is never gated on punch-in here: closing a day is the one
+        // action an employee must always be able to complete.
+        const sinceLunchTooSoon = tooSoonSince(
+            attendance.lunchOutTime,
+            minGapSeconds(settings, 'workMinGapSeconds'),
+            { what: 'Lunch ended', doing: 'punching out' },
+        );
+        if (sinceLunchTooSoon) return res.status(400).json(sinceLunchTooSoon);
+
         // Rounded per settings.attendance.roundingInterval/Direction (only if
         // 'Punch Out' is in roundingAppliedTo) — this is what actually gets
         // stored and fed into worked-hours/half-day/payroll math.
@@ -898,6 +983,17 @@ exports.lunchIn = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
+        // Arriving and immediately starting lunch is the same double tap that
+        // produced the one-second breaks, one button earlier. Measured from the
+        // CURRENT session's punch-in, so a second shift is gated on when that
+        // shift started rather than on this morning.
+        const sinceArrivalTooSoon = tooSoonSince(
+            currentPunchIn(attendance),
+            minGapSeconds(settings, 'workMinGapSeconds'),
+            { what: 'You punched in', doing: 'starting lunch' },
+        );
+        if (sinceArrivalTooSoon) return res.status(400).json(sinceArrivalTooSoon);
+
         const lunchInGeo = evaluateGeofence({
             user, settings, rules, location,
             isWFH: attendance.isWFH || attendance.remarks === 'Work From Home',
@@ -988,29 +1084,13 @@ exports.lunchOut = async (req, res) => {
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
-        // A break has to last long enough to be a break.
-        //
-        // Observed 2026-09-17: two employees recorded lunches of ONE SECOND
-        // (14:52:48 to 14:52:49 and 18:18:58 to 18:18:59) -- a double tap on
-        // "Start Lunch" then "End Lunch", stored as a real break. It feeds
-        // straight into determineHalfDayStatus and, under a from_punches lunch
-        // policy, into the payroll deduction.
-        //
-        // `punchDebounceSeconds` guards DEVICE taps only; these arrived through
-        // the app, where nothing debounced them. Rejecting rather than silently
-        // ignoring matters: the employee is holding the phone and needs to know
-        // the break did not end, or they will believe it did.
-        const minLunchGapSec = Number(settings?.attendance?.lunchMinGapSeconds) > 0
-            ? Number(settings.attendance.lunchMinGapSeconds)
-            : 60;
-        const lunchGapMs = Date.now() - new Date(attendance.lunchInTime).getTime();
-        if (lunchGapMs >= 0 && lunchGapMs < minLunchGapSec * 1000) {
-            return res.status(400).json({
-                message: `Lunch started ${Math.round(lunchGapMs / 1000)}s ago. `
-                    + `Wait at least ${minLunchGapSec}s before ending it.`,
-                retryable: true,
-            });
-        }
+        // A break has to last long enough to be a break -- see tooSoonSince.
+        const lunchTooSoon = tooSoonSince(
+            attendance.lunchInTime,
+            minGapSeconds(settings, 'lunchMinGapSeconds'),
+            { what: 'Lunch started', doing: 'ending it' },
+        );
+        if (lunchTooSoon) return res.status(400).json(lunchTooSoon);
 
         const lunchOutGeo = evaluateGeofence({
             user, settings, rules, location,

@@ -106,7 +106,23 @@ const settle = () => new Promise((r) => setTimeout(r, 150));
     employeeId = emp._id;
     // Second and later sessions are opt-in per tenant; without this the
     // re-punch below is refused and part B would silently test nothing.
-    await Settings.create({ adminId, attendance: { allowMultiplePunches: true } });
+    // The minimum-gap gates are switched OFF for this tenant on purpose. This
+    // file is about WHICH CHANNEL each punch is attributed to, and it makes a
+    // whole day's punches in the same millisecond to get there. Real gaps would
+    // mean real sleeps, and the gates already have their own coverage in
+    // scratch/test_min_punch_gap.js.
+    //
+    // Without this the file is red: the lunch gate (which predates the other
+    // two) rejected the instant lunch-out, so "camera recorded lunch in + out"
+    // and both evidence-row assertions failed and had been failing.
+    await Settings.create({
+        adminId,
+        attendance: {
+            allowMultiplePunches: true,
+            lunchMinGapSeconds: 0,
+            workMinGapSeconds: 0,
+        },
+    });
 
     const atHQ = { address: 'HQ Rajkot', location: { lat: 22.3039, lng: 70.8022 } };
 

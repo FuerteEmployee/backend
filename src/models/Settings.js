@@ -115,6 +115,21 @@ const SettingsSchema = new mongoose.Schema({
         // without it, someone arriving at 09:30 who presses twice gets a
         // punch-in and an instant "lunch break started". 0 disables.
         punchDebounceSeconds: { type: Number, default: 120 },
+        // Minimum gap between consecutive punches made in the APP, where
+        // nothing debounces them -- punchDebounceSeconds above covers device
+        // taps only, and never reaches these handlers.
+        //
+        // `lunchMinGapSeconds` is how long a break must last (lunch-in to
+        // lunch-out). `workMinGapSeconds` is how long the work either side of
+        // it must last: punch-in to lunch-in, and lunch-out to punch-out.
+        // Both 0 to disable; unset means 60.
+        //
+        // These were read by attendance_controller before they were declared
+        // here, so strict mode dropped every write and the value was pinned at
+        // the 60s fallback no matter what an admin saved. That is the failure
+        // mode described in CLAUDE.md under "Settings fields that don't save".
+        lunchMinGapSeconds: { type: Number, default: 60 },
+        workMinGapSeconds: { type: Number, default: 60 },
         // Refuse a NEW punch-in once the employee's shift has ended. Punch-out
         // is never blocked. Default on: a punch-in after shift end can only
         // produce a zero-length, unpayable day (see attendance_controller's
