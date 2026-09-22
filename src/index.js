@@ -16,7 +16,18 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
             .then(() => {
                 // Long-running host (local / PM2 / EC2): run scheduled jobs in-process.
                 // On Vercel serverless the same jobs run via /api/cron instead.
-                startScheduler();
+                //
+                // DISABLE_SCHEDULER exists for developer machines pointed at a
+                // SHARED database. These jobs write: closeForgottenPunches()
+                // punches people out for yesterday. A laptop running against
+                // staging would do that a second time, concurrently with the
+                // real server and possibly from half-edited code. Set it in any
+                // .env that is not the machine that owns the deployment.
+                if (String(process.env.DISABLE_SCHEDULER).toLowerCase() === 'true') {
+                    console.log('[scheduler] disabled via DISABLE_SCHEDULER -- no jobs registered');
+                } else {
+                    startScheduler();
+                }
             })
             .catch(err => {
                 console.error("Failed to connect to database:", err);
