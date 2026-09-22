@@ -2,6 +2,9 @@ const mongoose = require('mongoose');
 const AdvanceSalaryRequest = require('../models/AdvanceSalaryRequest');
 const User = require('../models/User');
 
+/** Sane ceiling on a single advance-salary/loan request (mirrors the frontend's NewRequestModal cap). */
+const MAX_ADVANCE_SALARY_AMOUNT = 10_000_000; // ₹1 crore
+
 /**
  * GET /api/advance-salary
  * List advance salary & loan requests with filters
@@ -92,8 +95,11 @@ const createAdvanceSalaryRequest = async (req, res) => {
         if (!type || !['advance-salary', 'loan'].includes(type)) {
             return res.status(400).json({ success: false, message: 'Invalid type' });
         }
-        if (!amount || amount < 1) {
-            return res.status(400).json({ success: false, message: 'Amount must be positive' });
+        // Upper bound matters as much as the lower one: nothing here or on the
+        // client stopped an unreasonably long typed/pasted number from saving
+        // as-is — that's exactly how a ₹1.11e+23 request once landed in the DB.
+        if (!amount || amount < 1 || amount > MAX_ADVANCE_SALARY_AMOUNT) {
+            return res.status(400).json({ success: false, message: `Amount must be between ₹1 and ₹${MAX_ADVANCE_SALARY_AMOUNT.toLocaleString('en-IN')}` });
         }
         if (!reason || reason.trim().length === 0) {
             return res.status(400).json({ success: false, message: 'Reason is required' });
