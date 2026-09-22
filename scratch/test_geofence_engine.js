@@ -6,12 +6,15 @@ const SRC = path.join(__dirname, '..', 'src');
 const Attendance = require(path.join(SRC, 'models/Attendance'));
 const AttendanceEvent = require(path.join(SRC, 'models/AttendanceEvent'));
 const Branch = require(path.join(SRC, 'models/Branch'));
+const Department = require(path.join(SRC, 'models/Department'));
 const GeofenceAudit = require(path.join(SRC, 'models/GeofenceAudit'));
 const Settings = require(path.join(SRC, 'models/Settings'));
 const Shift = require(path.join(SRC, 'models/Shift'));
 const Tracking = require(path.join(SRC, 'models/Tracking'));
 const User = require(path.join(SRC, 'models/User'));
-const { evaluateEmployee } = require(path.join(SRC, 'utils/geofence_engine'));
+const {
+    evaluateEmployee, replayEmployee, REPLAY_MAX_STEPS,
+} = require(path.join(SRC, 'utils/geofence_engine'));
 const GeofencePendingExit = require(path.join(SRC, 'models/GeofencePendingExit'));
 const { istStartOfDay } = require(path.join(SRC, 'utils/attendance_helpers'));
 
@@ -33,23 +36,35 @@ const point = (metres) => ({
 async function reset() {
     await Promise.all([
         Attendance.deleteMany({}), AttendanceEvent.deleteMany({}), Branch.deleteMany({}),
+        Department.deleteMany({}),
         GeofenceAudit.deleteMany({}), GeofencePendingExit.deleteMany({}), Settings.deleteMany({}),
         Shift.deleteMany({}), Tracking.deleteMany({}), User.deleteMany({}),
     ]);
 }
 
-async function seed({ enabled = true, shadowMode = false, geofenceExempt = false, sessions = null, closed = false } = {}) {
+async function seed({
+    enabled = true, shadowMode = false, geofenceExempt = false, sessions = null, closed = false,
+    autoPunchOutEnabled = true, shiftTimes = { startTime: '09:00', endTime: '18:00' },
+} = {}) {
     const admin = await User.create({ name: 'Test Admin', phone: '9000100001', role: 'admin', isActive: true });
     const branch = await Branch.create({
         adminId: admin._id, branchName: 'HQ', branchLocation: 'Test city',
         ...OFFICE, radius: 100, geoFenceEnabled: true,
     });
-    const shift = await Shift.create({ adminId: admin._id, name: 'Day', startTime: '09:00', endTime: '18:00' });
+    const shift = await Shift.create({ adminId: admin._id, name: 'Day', ...shiftTimes });
+    // The engine refuses to close for a department that has not opted in, and
+    // an employee with NO department counts as not opted in. Without this the
+    // whole suite short-circuits at `department_disabled` long before reaching
+    // any of the behaviour it means to test.
+    const department = await Department.create({
+        adminId: admin._id, name: 'Development', trackingEnabled: true, autoPunchOutEnabled,
+    });
     const employee = await User.create({
         name: 'Employee', phone: '9000100002', role: 'employee', adminId: admin._id,
         // `designation` does not exist on the User schema and is dropped by
         // strict mode, so exemption is driven by the explicit flag.
-        branchId: branch._id, shiftId: shift._id, geofenceExempt, isActive: true,
+        branchId: branch._id, shiftId: shift._id, departmentId: department._id,
+        geofenceExempt, isActive: true,
     });
     // Settings has legacy fields with the same name in its schema. Insert the
     // actual nested engine configuration directly so this test exercises what
@@ -67,7 +82,7 @@ async function seed({ enabled = true, shadowMode = false, geofenceExempt = false
         adminId: admin._id, employeeId: employee._id, date: DAY, punchIn: openAt,
         punchOut: closed ? at(60) : null, status: 'present', shifts: daySessions,
     });
-    return { admin, branch, shift, employee, attendance };
+    return { admin, branch, shift, department, employee, attendance };
 }
 
 async function seedClearExit({ admin, employee }) {
@@ -225,7 +240,10 @@ async function eventFor(query) {
     ok('re-evaluating the identical evidence does NOT advance the round',
         repeat.reason === 'confirming' && repeat.rounds === 1, JSON.stringify(repeat));
     const pendingAfterRepeat = await GeofencePendingExit.findOne({ adminId: s.admin._id, employeeId: s.employee._id }).lean();
-    ok('the pending-exit round count itself stayed at 1', pendingAfterRepeat.rounds === 1, JSON.stringify(pendingAfterRepeat));
+    // Read through a null rather than off it: when an earlier expectation in
+    // this section is not met the pending row is already gone, and dereferencing
+    // it aborts the whole suite before the later sections ever run.
+    ok('the pending-exit round count itself stayed at 1', pendingAfterRepeat?.rounds === 1, JSON.stringify(pendingAfterRepeat));
 
     console.log('\n- coming back inside clears the pending sequence -');
     await reset();
@@ -312,6 +330,145 @@ async function eventFor(query) {
     ok('closing session 3 backfills worked-time on the earlier sessions',
         attendance.shifts.every((x) => typeof x.workMs === 'number'),
         JSON.stringify(attendance.shifts.map((x) => x.workMs)));
+
+    // The root punchOut is what the nightly close job, the on-duty stat and the
+    // next punch-in attempt read to decide whether the day is finished. The old
+    // rule only mirrored when the closed session was index 0, so closing
+    // session 3 left the root null and the day read as permanently open.
+    ok('closing a LATER session still mirrors the root punchOut',
+        attendance.punchOut !== null
+        && new Date(attendance.punchOut).getTime() === new Date(attendance.shifts[2].punchOut).getTime(),
+        JSON.stringify({ root: attendance.punchOut, session3: attendance.shifts[2].punchOut }));
+
+    console.log('\n- work performed entirely outside the shift window -');
+    // The 2026-09-16 row: punch-in one minute after shift end, auto-closed 52
+    // minutes later. The clamp pulls punch-out back to shift end while punch-in
+    // stays past it, so the day credits zero. gradeDay already calls that
+    // needs_review; the engine used to compute that verdict and throw it away,
+    // storing an ordinary half-day instead and never showing a human.
+    await reset();
+    // Shift ends at 05:30 IST; the seeded session opens at 06:00 IST, so the
+    // whole session lies beyond the window.
+    s = await seed({ enabled: true, shadowMode: false, shiftTimes: { startTime: '03:00', endTime: '05:30' } });
+    driven = await driveToConfirmedExit(s);
+    attendance = await Attendance.findById(s.attendance._id).lean();
+    const outsideSession = attendance.shifts[0];
+    ok('the day is actually closed', attendance.autoPunchOut === true && outsideSession.punchOut !== null,
+        JSON.stringify(attendance));
+    ok('credited work clamps to zero (the clamp still applies)',
+        outsideSession.workMs === 0, JSON.stringify({ workMs: outsideSession.workMs }));
+    ok('the real duration survives as grossMs',
+        outsideSession.grossMs > 0
+        && outsideSession.grossMs === new Date(outsideSession.punchOut) - new Date(outsideSession.punchIn),
+        JSON.stringify({ grossMs: outsideSession.grossMs }));
+    ok('a zero-credit day with a real punch-in is flagged needs_review, not half-day',
+        attendance.status === 'needs_review',
+        JSON.stringify({ status: attendance.status, totalWorkMs: attendance.totalWorkMs }));
+
+    // ── replaying a late-arriving backlog ────────────────────────────────────
+    //
+    // Brij's real 17 Sep shape: punched in, drove out to 415 m, came back 15
+    // minutes later, and every fix arrived in ONE batch 9-24 minutes late. The
+    // live engine saw only a current position of 12 m and did nothing, so a
+    // genuine absence went unrecorded. These cover the replay that fixes it.
+    console.log('\n- replay: a backlog that proves an absence already over -');
+
+    /** Lay down a trip: inside, out to `metres`, and optionally back inside. */
+    const layTrip = async (s, { outFrom, outTo, backAt = null, metres = 415 }) => {
+        const rows = [];
+        // Inside before leaving, so there is a last-inside moment to close at.
+        for (let t = outFrom + 240; t > outFrom; t -= 30) {
+            rows.push({ ...point(20), accuracy: 12, timestamp: at(t) });
+        }
+        // Out, moving, so the deciding set is genuinely distinct.
+        for (let t = outFrom, i = 0; t > outTo; t -= 30, i++) {
+            rows.push({ ...point(metres + i * 12), accuracy: 15, timestamp: at(t) });
+        }
+        if (backAt !== null) {
+            for (let t = outTo; t > backAt; t -= 30) {
+                rows.push({ ...point(18), accuracy: 12, timestamp: at(t) });
+            }
+        }
+        await Tracking.insertMany(rows.map((r) => ({
+            adminId: s.admin._id, employeeId: s.employee._id, ...r, receivedAt: NOW,
+        })));
+        return rows;
+    };
+
+    await reset();
+    s = await seed({ enabled: true, shadowMode: false });
+    // Out from 40 min ago until 20 min ago, back inside since.
+    await layTrip(s, { outFrom: 40 * 60, outTo: 20 * 60, backAt: 60 });
+    let replay = await replayEmployee({
+        adminId: s.admin._id, employeeId: s.employee._id,
+        from: at(40 * 60), to: at(60),
+    });
+    attendance = await Attendance.findById(s.attendance._id).lean();
+    ok('the absence is detected even though every fix arrived late',
+        replay.closed === true, JSON.stringify(replay));
+    ok('the session is closed at a LAST-INSIDE moment, not at batch arrival',
+        attendance.shifts[0].punchOut && new Date(attendance.shifts[0].punchOut) < at(20 * 60),
+        JSON.stringify({ out: attendance.shifts[0].punchOut, arrival: NOW }));
+    ok('a new session is opened where the backlog shows them back',
+        replay.reopened === true && attendance.shifts.length === 2
+        && attendance.shifts[1].punchIn && !attendance.shifts[1].punchOut,
+        JSON.stringify(attendance.shifts.map((x) => ({ in: x.punchIn, out: x.punchOut }))));
+    ok('the reopened session is marked system, not a real punch',
+        attendance.shifts[1]?.punchInSource === 'system', String(attendance.shifts[1]?.punchInSource));
+
+    console.log('\n- replay: still away, nothing to reopen -');
+    await reset();
+    s = await seed({ enabled: true, shadowMode: false });
+    await layTrip(s, { outFrom: 40 * 60, outTo: 60, backAt: null });
+    replay = await replayEmployee({
+        adminId: s.admin._id, employeeId: s.employee._id, from: at(40 * 60), to: at(60),
+    });
+    attendance = await Attendance.findById(s.attendance._id).lean();
+    ok('closed', replay.closed === true, JSON.stringify(replay));
+    ok('NOT reopened — they never came back',
+        replay.reopened === false && attendance.shifts.length === 1, JSON.stringify(replay));
+
+    console.log('\n- replay: a backlog that proves nothing -');
+    await reset();
+    s = await seed({ enabled: true, shadowMode: false });
+    await Tracking.insertMany(Array.from({ length: 30 }, (_, i) => ({
+        adminId: s.admin._id, employeeId: s.employee._id,
+        ...point(20 + i), accuracy: 12, timestamp: at(40 * 60 - i * 40), receivedAt: NOW,
+    })));
+    replay = await replayEmployee({
+        adminId: s.admin._id, employeeId: s.employee._id, from: at(40 * 60), to: at(60),
+    });
+    attendance = await Attendance.findById(s.attendance._id).lean();
+    ok('a backlog entirely INSIDE the fence closes nothing',
+        replay.closed === false && attendance.shifts.length === 1 && !attendance.shifts[0].punchOut,
+        JSON.stringify(replay));
+
+    console.log('\n- replay: idempotent -');
+    await reset();
+    s = await seed({ enabled: true, shadowMode: false });
+    await layTrip(s, { outFrom: 40 * 60, outTo: 20 * 60, backAt: 60 });
+    await replayEmployee({ adminId: s.admin._id, employeeId: s.employee._id, from: at(40 * 60), to: at(60) });
+    const afterFirst = await Attendance.findById(s.attendance._id).lean();
+    await replayEmployee({ adminId: s.admin._id, employeeId: s.employee._id, from: at(40 * 60), to: at(60) });
+    const afterSecond = await Attendance.findById(s.attendance._id).lean();
+    ok('replaying the same backlog twice does not duplicate sessions',
+        afterFirst.shifts.length === afterSecond.shifts.length,
+        JSON.stringify({ first: afterFirst.shifts.length, second: afterSecond.shifts.length }));
+    ok('and does not move the close time',
+        String(afterFirst.shifts[0].punchOut) === String(afterSecond.shifts[0].punchOut),
+        JSON.stringify({ a: afterFirst.shifts[0].punchOut, b: afterSecond.shifts[0].punchOut }));
+
+    console.log('\n- replay: bounded -');
+    await reset();
+    s = await seed({ enabled: true, shadowMode: false });
+    replay = await replayEmployee({
+        // Two days of backlog: must stop at the cap rather than walking it all.
+        adminId: s.admin._id, employeeId: s.employee._id,
+        from: new Date(NOW.getTime() - 48 * 3600 * 1000), to: NOW,
+    });
+    ok('a huge backlog stops at the step cap', replay.steps <= REPLAY_MAX_STEPS,
+        JSON.stringify({ steps: replay.steps, cap: REPLAY_MAX_STEPS }));
+    ok('and says so', replay.truncated === true, JSON.stringify(replay));
 
     console.log(`\n${pass} passed, ${fail} failed`);
     await mongoose.disconnect();

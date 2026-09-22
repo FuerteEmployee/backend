@@ -14,7 +14,7 @@
 // someone out while they are at their desk costs them their afternoon and
 // their trust in the system. Those errors are not symmetric and this file does
 // not treat them as though they are.
-//
+
 // The decision is never taken on a single fix. A phone indoors will happily
 // report a position several hundred metres away -- Android falls back to
 // wifi/cell-tower trilateration and reports it with the same API and the same
@@ -106,6 +106,38 @@ const GEOFENCE_CONFIRMATIONS = Number(process.env.GEOFENCE_CONFIRMATIONS) || 3;
 /** Minimum total time the confirmation sequence must span (ms). */
 const MIN_CONFIRMATION_SPAN_MS = Number(process.env.GEOFENCE_MIN_CONFIRMATION_SPAN_MS) || 120 * 1000;
 
+/**
+ * How far past the exit threshold counts as UNAMBIGUOUS. Beyond this, ONE
+ * confirmed round is enough and no minimum span applies.
+ *
+ * Three rounds over two minutes assumes fixes arrive steadily. They do not:
+ * the native tracker flushes in bursts, and a burst yields only one round
+ * because rounds advance on newest-fix, not on fix count. The pending exit
+ * then ages out before the next burst and the sequence restarts forever.
+ *
+ * Measured here on 2026-09-15: an employee walked to 901 m from a 100 m fence
+ * with accuracy as good as 6 m. The engine returned `punched_out` eight times
+ * across 102 seconds — and never fired, because 102 s fell short of the 120 s
+ * span and the sequence was then discarded. The reference implementation hit
+ * exactly this ("an employee genuinely 500m away for an hour was never punched
+ * out", 8 Aug 2026) and added this factor.
+ *
+ * It relaxes nothing that ever misfired: every wrong punch-out in the
+ * reference's incident log was MARGINAL — 159-222 m against a 150 m threshold,
+ * under 1.7x. Requiring the full three rounds below 3x keeps that protection
+ * intact while letting an unmistakable departure through.
+ */
+const GEOFENCE_UNAMBIGUOUS_FACTOR = Number(process.env.GEOFENCE_UNAMBIGUOUS_FACTOR) || 3;
+
+/**
+ * An exit-in-progress that has gone quiet is no longer an exit-in-progress.
+ *
+ * Confirmation rounds must be CONTINUOUS. Without a staleness bound, a pending
+ * exit banked at 09:00 could combine with an unrelated blip hours later, and
+ * the elapsed hour would trivially satisfy the span requirement.
+ */
+const GEOFENCE_PENDING_STALE_MS = Number(process.env.GEOFENCE_PENDING_STALE_MS) || 120 * 1000;
+
 /** Roles whose work is legitimately away from a branch. */
 const FIELD_ROLE_PATTERNS = (process.env.GEOFENCE_FIELD_ROLES ||
     'field,sales,marketing,delivery,driver,technician,site')
@@ -175,6 +207,17 @@ function medoid(points) {
     }
     return best;
 }
+
+/**
+ * How many EXACTLY distinct coordinates a set contains.
+ *
+ * Deliberately exact (6 decimal places, ~0.1 m) and not a proximity test. A
+ * cached/stuck fix is re-delivered byte-identical, which is what this detects.
+ * Two readings 10 m apart are two observations of a moving person, not one
+ * observation repeated, and must not be conflated.
+ */
+const countExactDistinct = (points) =>
+    new Set(points.map((p) => p.latitude.toFixed(6) + ',' + p.longitude.toFixed(6))).size;
 
 /** How many of these points are meaningfully different places? */
 function countDistinct(points, epsilonM = DISTINCT_EPSILON_M) {
@@ -268,7 +311,20 @@ function evaluateExit({ fixes, branches, fallbackRadius = 3000, now, punchInAt, 
 
     evidence.fixesInWindow = inWindow.length;
 
-    const trusted = inWindow.filter((f) => isTrustworthyFix(f.accuracy));
+    // Collapse exact coordinate repeats before anything else looks at them.
+    // Ingest flags most of these as `cached`, but a repeat that arrives by a
+    // path which did not flag it must still not occupy two of the five
+    // deciding slots. Keeping the FIRST sighting preserves the true moment the
+    // position was observed.
+    const seenCoord = new Set();
+    const deduped = inWindow.filter((f) => {
+        const k = Number(f.latitude).toFixed(6) + ',' + Number(f.longitude).toFixed(6);
+        if (seenCoord.has(k)) return false;
+        seenCoord.add(k);
+        return true;
+    });
+
+    const trusted = deduped.filter((f) => isTrustworthyFix(f.accuracy));
     evidence.trustworthyFixes = trusted.length;
     if (inWindow.length) {
         evidence.worstAccuracyM = Math.max(
@@ -359,7 +415,27 @@ function evaluateExit({ fixes, branches, fallbackRadius = 3000, now, punchInAt, 
     // employees). Requiring the deciding set itself to be fully distinct closes
     // that path: a repeated reading among the fixes actually used to decide is
     // one observation re-delivered, not independent confirmation.
-    if (countDistinct(deciding) < deciding.length) {
+    // BACKSTOP ONLY — the collapse above normally makes this unreachable.
+    //
+    // Kept deliberately rather than deleted: the collapse is what handles the
+    // repeat (dropping it and keeping five genuinely distinct fixes, so the
+    // decision can still proceed), and this is the assertion that it worked. If
+    // a future change reorders or removes the collapse, this fails closed by
+    // abstaining rather than letting a repeated coordinate vote.
+    //
+    // EXACT equality, not the 15 m epsilon.
+    //
+    // The reference implementation this was ported from counts distinct
+    // COORDINATES here; the port substituted a 15 m proximity test, which is a
+    // different rule entirely. At a 15-second sample rate a walking person
+    // covers ~21 m, so any pause, turn or slow patch puts two consecutive
+    // fixes under 15 m apart and the whole exit is thrown away as a 'stuck
+    // reading'. Measured on 2026-09-15: a genuine 901 m departure was rejected
+    // because two fixes 18 seconds apart were 10 m apart.
+    //
+    // What this guard exists to catch is a coordinate re-delivered unchanged —
+    // that is exact, and exact is what it should test.
+    if (countExactDistinct(deciding) < deciding.length) {
         return abstain(
             'repeated_coordinate',
             'A coordinate repeats among the fixes deciding this exit — one stuck reading, not independent evidence.',
@@ -469,4 +545,6 @@ module.exports = {
     FIELD_ROLE_PATTERNS,
     GEOFENCE_CONFIRMATIONS,
     MIN_CONFIRMATION_SPAN_MS,
+    GEOFENCE_UNAMBIGUOUS_FACTOR,
+    GEOFENCE_PENDING_STALE_MS,
 };

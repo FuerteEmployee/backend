@@ -14,7 +14,7 @@ const punchSequence = require('../utils/punch_sequence');
 const punchReconcile = require('../utils/punch_reconcile');
 const { istStartOfDay, istDateKey, parseDeviceTimestamp } = require('../utils/attendance_helpers');
 const Device = require('../models/Device');
-const { recordClockSkew } = require('../utils/device_clock');
+const { recordClockSkew, resolveClockCorrection } = require('../utils/device_clock');
 const { sendDeviceClockAlert } = require('../jobs/notify');
 
 // Maps a resolved action name to the handler that records it.
@@ -113,21 +113,44 @@ async function checkDeviceClock(device, tapTime) {
  */
 async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings, device }) {
     // A terminal configured to the wrong timezone reports a perfectly
-    // plausible timestamp that is a whole offset out. `clockOffsetMinutes` is
-    // the stored, deliberate correction for such a device; it stays 0 unless
-    // somebody has set it.
-    const parsed = parseDeviceTimestamp(rawDeviceTime, new Date(), device?.clockOffsetMinutes || 0);
-    const tapTime = parsed || new Date();
+    // plausible timestamp that is a whole offset out. The correction is either
+    // one somebody set by hand, or one measured from this device's own recent
+    // samples -- see utils/device_clock.js resolveClockCorrection.
+    const now = new Date();
+
+    // Parse ONCE uncorrected, purely to measure. Measuring skew against the
+    // already-corrected value would read ~0, which would erase the very
+    // evidence the correction is derived from and make it oscillate on and off
+    // between taps. The raw reading is the only honest input to the detector.
+    const rawParsed = parseDeviceTimestamp(rawDeviceTime, now, 0);
+
+    const correction = resolveClockCorrection(device);
+    const parsed = correction.minutes
+        ? parseDeviceTimestamp(rawDeviceTime, now, correction.minutes)
+        : rawParsed;
+
+    const tapTime = parsed || now;
     const dayKey = istDateKey(tapTime);
     const employeeId = employee._id;
 
-    if (!parsed) {
+    if (!rawParsed) {
         console.warn(
             `[iclock] SN=${sn} PIN=${pin} sent an unusable timestamp ("${rawDeviceTime}") — ` +
             'falling back to receive time; check the terminal\'s clock.'
         );
     } else if (device) {
-        checkDeviceClock(device, tapTime).catch((err) =>
+        if (correction.minutes) {
+            // Logged on every corrected tap on purpose: a punch time that does
+            // not match what the terminal displayed must be explainable from
+            // the logs, or the next person to look at it has no way to tell a
+            // correction from a bug.
+            console.log(
+                `[iclock] SN=${sn} PIN=${pin} tap ${rawDeviceTime} corrected by ` +
+                `${correction.minutes > 0 ? '+' : ''}${correction.minutes} min (${correction.source}) ` +
+                `-> ${tapTime.toISOString()}`
+            );
+        }
+        checkDeviceClock(device, rawParsed).catch((err) =>
             console.error('[iclock] clock check failed:', err.message));
     }
 

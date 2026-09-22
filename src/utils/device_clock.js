@@ -37,6 +37,18 @@ const SAMPLE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const KNOWN_TZ_OFFSETS = [330, 300, 270, 240, 210, 180, 120, 60, 360, 420, 480, 540, 570, 600, 660, 720];
 
 /**
+ * How many samples must agree on the same offset before it is trusted enough
+ * to correct punches with. One sample is indistinguishable from one late tap.
+ */
+const MIN_CORROBORATING_SAMPLES = 3;
+
+/** How far a sample may sit from the minimum and still count as agreeing. */
+const CORROBORATION_TOLERANCE_MINUTES = 5;
+
+/** A measured offset is snapped to a real timezone when it is this close. */
+const TZ_SNAP_TOLERANCE_MINUTES = 3;
+
+/**
  * Fold one tap's skew into the device's rolling sample set.
  *
  * Mutates `device` but does not save it -- the caller is already writing the
@@ -97,4 +109,81 @@ function describeSkew(minutes) {
     return `The terminal's clock is ${span} ${direction} real time. Every punch it records is wrong by that much.`;
 }
 
-module.exports = { recordClockSkew, describeSkew, SKEW_SUSPECT_MINUTES, KNOWN_TZ_OFFSETS };
+/**
+ * How much to add to what this terminal reports, so its punches land at the
+ * real time.
+ *
+ * The Device schema says an offset is "never set automatically", and the reason
+ * given was right: a STORED offset keeps being applied after somebody fixes the
+ * clock, and every punch is then corrected twice with nothing on screen to say
+ * why. That objection is specific to a stored number, though. What this returns
+ * is MEASURED, from the device's own recent samples, every time it is asked --
+ * so it is self-cancelling by construction. The moment the terminal starts
+ * reporting the right time, its next live tap contributes a ~0 sample, the
+ * minimum collapses to ~0, and the correction stops on its own. Nobody has to
+ * remember to turn it off.
+ *
+ * That property is what makes this usable on a terminal with no NTP and a dead
+ * RTC battery, which loses its clock on every power cut. Asking somebody to
+ * re-set it by hand after each outage is not a fix, and a stored offset would
+ * be wrong again the moment the clock moved.
+ *
+ * Deliberately conservative -- it would rather leave a punch visibly wrong than
+ * silently move a correct one:
+ *
+ *  - A MANUAL clockOffsetMinutes always wins. Somebody set that on purpose.
+ *  - The minimum is used, never the average, for the reason in the file header:
+ *    a backlog flush inflates recent samples but cannot lower the minimum.
+ *  - The minimum must be CORROBORATED by several samples agreeing with it.
+ *    One large gap is far more likely to be a single late tap than a clock
+ *    that is wrong by exactly that much.
+ *  - The result snaps to a real timezone offset when it is within a few
+ *    minutes of one, because that is what the failure actually is -- a
+ *    terminal left on the wrong timezone, not a clock that drifted to 329.
+ *
+ * @returns {{minutes: number, source: 'manual'|'measured'|'none', confident: boolean}}
+ */
+function resolveClockCorrection(device) {
+    const manual = Number(device?.clockOffsetMinutes) || 0;
+    if (manual !== 0) return { minutes: manual, source: 'manual', confident: true };
+
+    const samples = Array.isArray(device?.clockSkewSamples) ? device.clockSkewSamples : [];
+    const usable = samples.filter((s) => s && Number.isFinite(Number(s.minutes)));
+    if (usable.length < MIN_CORROBORATING_SAMPLES) return { minutes: 0, source: 'none', confident: false };
+
+    // Smallest absolute skew seen: the closest this device has come to being
+    // observed live, which is the best available estimate of the pure clock
+    // offset with queue latency removed.
+    let best = null;
+    for (const s of usable) {
+        const m = Number(s.minutes);
+        if (best === null || Math.abs(m) < Math.abs(best)) best = m;
+    }
+    if (best === null || Math.abs(best) <= SKEW_SUSPECT_MINUTES) {
+        // Within ordinary latency -- nothing to correct, and this is the branch
+        // a freshly-fixed clock falls into on its very next tap.
+        return { minutes: 0, source: 'none', confident: false };
+    }
+
+    // Does the rest of the evidence agree, or is this one odd sample?
+    const agreeing = usable.filter(
+        (s) => Math.abs(Math.abs(Number(s.minutes)) - Math.abs(best)) <= CORROBORATION_TOLERANCE_MINUTES,
+    ).length;
+    if (agreeing < MIN_CORROBORATING_SAMPLES) return { minutes: 0, source: 'none', confident: false };
+
+    const tz = KNOWN_TZ_OFFSETS.find((o) => Math.abs(Math.abs(best) - o) <= TZ_SNAP_TOLERANCE_MINUTES);
+    const magnitude = tz !== undefined ? tz : Math.abs(best);
+
+    // skew = receivedAt - deviceTime, so a POSITIVE skew means the terminal is
+    // running behind and its timestamps must be pushed forward by that much.
+    return { minutes: best > 0 ? magnitude : -magnitude, source: 'measured', confident: true };
+}
+
+module.exports = {
+    recordClockSkew,
+    describeSkew,
+    resolveClockCorrection,
+    SKEW_SUSPECT_MINUTES,
+    KNOWN_TZ_OFFSETS,
+    MIN_CORROBORATING_SAMPLES,
+};

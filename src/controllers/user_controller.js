@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
+const { MAX_SESSIONS } = require('../utils/shift_status');
 const Festival = require('../models/Festival');
 const Subscription = require('../models/Subscription');
 const LoginSession = require('../models/LoginSession');
@@ -277,6 +278,48 @@ exports.getProfile = async (req, res) => {
         userObj.recentAttendance = recentAttendance;
         userObj.upcomingHolidays = upcomingHolidays;
         userObj.allowMultiplePunches = settings?.attendance?.allowMultiplePunches || false;
+        // Sent rather than hardcoded in the app: the cap is env-overridable
+        // (MAX_DAILY_SESSIONS), so a client with its own copy of "5" would
+        // silently disagree with the server the first time anyone changed it —
+        // and the employee would see a live button that always fails.
+        userObj.maxDailySessions = MAX_SESSIONS;
+
+        // May this employee declare a day Work From Home?
+        //
+        // Resolved with the SAME function the punch endpoint uses to accept or
+        // refuse the punch (per-employee attendanceExceptions override, else
+        // the tenant default), so the toggle is offered exactly when it would
+        // work. Sent rather than derived on the phone for the same reason
+        // maxDailySessions is: the rule has one home, and the client showing a
+        // control the server then refuses is the failure being avoided.
+        //
+        // An employee with NO branch is remote by definition and is already
+        // sent isWFH on every punch, so the toggle is pointless for them --
+        // the app hides it and nothing changes.
+        const { getAttendanceRules } = require('./attendance_controller');
+        userObj.canWorkFromHome = !!getAttendanceRules(user, settings).remotePunch;
+
+        // EFFECTIVE tracking flag, resolved server-side.
+        //
+        // The app starts the background tracker on profile.trackingEnabled, so
+        // the department policy has to be folded in HERE -- the phone has no
+        // business knowing how the two settings compose, and leaving it to the
+        // client would mean the rule lived in two places and eventually drifted.
+        //
+        // OR, not AND: sixteen employees were enabled individually before the
+        // department field existed, and requiring both would have switched every
+        // one of them off silently the moment this shipped.
+        userObj.trackingEnabled = user.trackingEnabled === true
+            || user.departmentId?.trackingEnabled === true;
+
+        // Surfaced so the app can explain WHY it is tracking, rather than the
+        // employee discovering a location icon with no account of it.
+        userObj.trackingPolicy = {
+            fromEmployee: user.trackingEnabled === true,
+            fromDepartment: user.departmentId?.trackingEnabled === true,
+            departmentName: user.departmentId?.name || null,
+            autoPunchOutEnabled: user.departmentId?.autoPunchOutEnabled === true,
+        };
 
         res.json(userObj);
     } catch (error) {

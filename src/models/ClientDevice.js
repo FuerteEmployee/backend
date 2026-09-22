@@ -60,13 +60,20 @@ const ClientDeviceSchema = new mongoose.Schema({
         // Battery optimisation exemption. With it on, the OS freezes the
         // service after a few minutes of screen-off.
         batteryUnrestricted: permission(),
-        // OEM auto-start whitelist (MIUI, ColorOS, Funtouch, One UI). NOTE:
-        // there is no API that can READ this -- no public one exists -- so a
-        // 'granted' here is the EMPLOYEE'S OWN CLAIM after being sent to the
-        // settings screen, not a verified fact. Treat it as the weakest signal
-        // on this document and never as proof.
+        // OEM auto-start whitelist (MIUI, ColorOS, Funtouch, One UI). No public
+        // API can READ this, so a 'granted' here is normally the EMPLOYEE'S OWN
+        // CLAIM after being sent to the settings screen -- UNLESS
+        // autoStartProven below is also set, which is the one case where it was
+        // actually observed.
         autoStart: permission(),
     },
+
+    // Auto-start was not claimed but DEMONSTRATED: the app resumed tracking by
+    // itself after a device reboot, which only an auto-start whitelisting could
+    // have allowed. Latched, because a device that has done it once has the
+    // permission, and a phone that simply has not rebooted since is not
+    // evidence that it lost it.
+    autoStartProven: { type: Boolean, default: false },
 
     // True once the employee completed the first-run setup gate with every
     // required item satisfied. Stored rather than derived so support can see

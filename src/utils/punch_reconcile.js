@@ -16,7 +16,7 @@
 // sequence — this is the behaviour for everyone else, which is the default.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { istStartOfDay, istDateKey, applyPunchRounding, isLatePunchIn, determineHalfDayStatus } = require('./attendance_helpers');
+const { istStartOfDay, istDateKey, applyPunchRounding, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks } = require('./attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, gradeDay } = require('./shift_status');
 // Safe to require directly: salary_controller pulls only models and utils, so
 // there is no cycle back into this file or into attendance_controller.
@@ -222,6 +222,12 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
         if (shift && isLatePunchIn(attendance.punchIn, shift, settings)) status = 'late';
 
         if (attendance.punchIn && attendance.punchOut) {
+            // Every re-derivation regrades the whole day from scratch, so the
+            // previous derivation's grading remarks are superseded and must go
+            // with it -- otherwise a day re-derived after a backlog flush keeps
+            // the verdict it had when only the first tap was known.
+            attendance.remarks = stripGradingRemarks(attendance.remarks);
+
             const { status: finalStatus, remarksAppend } = determineHalfDayStatus({
                 punchIn: attendance.punchIn,
                 punchOut: attendance.punchOut,

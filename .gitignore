@@ -75,3 +75,13 @@ public/
 ios/build/
 android/app/build/
 .vercel
+
+# Published build artifacts. These are outputs, not source: a few MB each, one
+# per release, and regenerable from the frontend build. This repo is public and
+# `git add .` here has form, so they are ignored rather than merely untracked.
+bundles/
+apks/
+
+# Live credentials. Each environment keeps its own copy on disk;
+# the committed one leaked production secrets into a public repo.
+.env

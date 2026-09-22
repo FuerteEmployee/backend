@@ -51,9 +51,11 @@ const GeofencePendingExit = require('../models/GeofencePendingExit');
 
 const {
     evaluateExit, isFieldRole, WINDOW_MS, GEOFENCE_CONFIRMATIONS, MIN_CONFIRMATION_SPAN_MS,
+    GEOFENCE_UNAMBIGUOUS_FACTOR, GEOFENCE_PENDING_STALE_MS,
 } = require('./geofence_window');
 const { istStartOfDay, istEndOfDay, istDateKey } = require('./attendance_helpers');
-const { computeWorkedMs, computeSessionWorkMs, gradeDay, openSessionIndex, allSessions } = require('./shift_status');
+const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, allSessions, syncRootPunchOut, MAX_SESSIONS } = require('./shift_status');
+const { isTrustworthyFix, nearestBranchDistance } = require('./distance');
 const { logAttendanceEvent } = require('./attendance_event_logger');
 const { sendAutoPunchOutNotice } = require('../jobs/notify');
 
@@ -122,6 +124,15 @@ async function advanceConfirmation({ adminId, employeeId, now, verdict }) {
 
     let pending = await GeofencePendingExit.findOne({ adminId, employeeId });
 
+    // A sequence that has gone quiet is abandoned rather than resumed. Rounds
+    // have to be CONTINUOUS: two rounds banked this morning must not combine
+    // with one blip this afternoon, where the hours between them would satisfy
+    // the span requirement on their own.
+    if (pending && Date.now() - new Date(pending.lastEvaluatedAt).getTime() > GEOFENCE_PENDING_STALE_MS) {
+        await GeofencePendingExit.deleteOne({ _id: pending._id });
+        pending = null;
+    }
+
     if (!pending) {
         pending = await GeofencePendingExit.create({
             adminId, employeeId,
@@ -156,8 +167,23 @@ async function advanceConfirmation({ adminId, employeeId, now, verdict }) {
         await pending.save();
     }
 
+    // An exit far beyond the threshold needs one round, not three.
+    //
+    // The five fixes behind a single round have already survived the accuracy
+    // gate, the distinct-position floor, the repeated-coordinate check and the
+    // 90-second span. At more than GEOFENCE_UNAMBIGUOUS_FACTOR x the threshold
+    // there is no reading of that evidence in which the employee is at their
+    // desk. Marginal exits — where every wrong punch-out has ever happened —
+    // keep the full three-round requirement.
+    const unambiguous = Number.isFinite(verdict.evidence.thresholdM)
+        && Number.isFinite(verdict.evidence.distanceM)
+        && verdict.evidence.distanceM > verdict.evidence.thresholdM * GEOFENCE_UNAMBIGUOUS_FACTOR;
+
+    const roundsNeeded = unambiguous ? 1 : GEOFENCE_CONFIRMATIONS;
+    const spanNeeded = unambiguous ? 0 : MIN_CONFIRMATION_SPAN_MS;
+
     const spanMs = new Date(now).getTime() - new Date(pending.since).getTime();
-    const confirmed = pending.rounds >= GEOFENCE_CONFIRMATIONS && spanMs >= MIN_CONFIRMATION_SPAN_MS;
+    const confirmed = pending.rounds >= roundsNeeded && spanMs >= spanNeeded;
 
     if (confirmed) {
         // The sequence is spent -- clear it so the NEXT exit (a new session,
@@ -166,7 +192,7 @@ async function advanceConfirmation({ adminId, employeeId, now, verdict }) {
         await GeofencePendingExit.deleteOne({ adminId, employeeId });
     }
 
-    return { confirmed, rounds: pending.rounds, lastInsideAt: pending.lastInsideAt };
+    return { confirmed, rounds: pending.rounds, needed: roundsNeeded, unambiguous, lastInsideAt: pending.lastInsideAt };
 }
 
 /**
@@ -251,9 +277,44 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
         return { decision: 'suppressed', reason: 'role_exempt' };
     }
 
-    const attendance = await Attendance.findOne({
+    // Auto punch-out is opted INTO per department. An employee whose department
+    // has not enabled it is still evaluated -- the audit trail records what
+    // WOULD have happened -- but the day is never closed.
+    //
+    // No department, or one that has not enabled it, both mean "not enabled".
+    // Defaulting the other way would let a newly created department inherit the
+    // power to end somebody's shift without anyone choosing that.
+    const dept = user.departmentId;
+    if (!dept || dept.autoPunchOutEnabled !== true) {
+        await recordAudit({
+            ...base,
+            decision: 'suppressed',
+            reason: 'department_disabled',
+            shadow,
+            narrative: dept
+                ? `Auto punch-out is not enabled for the ${dept.name} department.`
+                : `${user.name} has no department, so no auto punch-out policy applies.`,
+        });
+        return { decision: 'suppressed', reason: 'department_disabled' };
+    }
+
+    let attendance = await Attendance.findOne({
         adminId, employeeId, date: { $gte: istStartOfDay(now), $lte: istEndOfDay(now) },
     });
+
+    // A night worker who punched in at 22:00 and is still on shift at 02:00 has
+    // their open session on YESTERDAY'S row, because attendance is bucketed by
+    // the IST day the session STARTED. Looking only at today makes them read as
+    // not punched in, so the fence silently stops watching the very people most
+    // likely to be away from a branch at that hour.
+    if (!attendance || !attendance.punchIn || openSessionIndex(attendance) === -1) {
+        const prevDay = new Date(istStartOfDay(now).getTime() - 1);
+        const prev = await Attendance.findOne({
+            adminId, employeeId,
+            date: { $gte: istStartOfDay(prevDay), $lte: istEndOfDay(prevDay) },
+        });
+        if (prev && prev.punchIn && openSessionIndex(prev) !== -1) attendance = prev;
+    }
 
     if (!attendance || !attendance.punchIn) {
         return { decision: 'suppressed', reason: 'not_punched_in', skipped: true };
@@ -264,9 +325,49 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
         return { decision: 'suppressed', reason: 'already_closed', skipped: true };
     }
 
+    // A day declared Work From Home is not measured against any fence.
+    //
+    // Every other exemption here is a property of the PERSON -- geofenceExempt,
+    // remotePunch, the department name -- resolved by isFieldRole() long before
+    // this point. WFH is a property of the DAY, so it cannot be known until the
+    // attendance row is in hand, which is why the check lives down here rather
+    // than beside the others.
+    //
+    // Without it, an office employee who declares one day remote is watched by
+    // the engine from their own home and punched out the moment the confirmation
+    // window agrees they are 400m from a branch they never went to. That is the
+    // single worst outcome this subsystem can produce: a closure that is
+    // correct by every measurement and wrong about what was being measured.
+    // Fails toward inaction, like every other ambiguity here.
+    if (attendance.isWFH) {
+        await recordAudit({
+            ...base, decision: 'suppressed', reason: 'work_from_home', shadow,
+            attendanceId: attendance._id,
+            narrative: `${user.name} is working from home today — exempt from auto punch-out.`,
+        });
+        return { decision: 'suppressed', reason: 'work_from_home' };
+    }
+
     const sessions = allSessions(attendance);
     const openSession = sessions[openIdx];
     const punchInAt = openSession?.punchIn || attendance.punchIn;
+
+    // A confirmation sequence belongs to ONE session. If the open session began
+    // after the pending exit started, that pending is a leftover from a session
+    // that has already ended and must not contribute rounds to this one.
+    //
+    // This closes a hole opened by making clearConfirmation fire only on an
+    // 'inside' verdict: a suppression (grace_period, on_lunch, no_branch) no
+    // longer clears, and GRACE_MS is 60s while GEOFENCE_PENDING_STALE_MS is
+    // 120s — so someone who punched out while away and punched straight back in
+    // could inherit the previous session's accumulated rounds and be punched
+    // out again almost immediately. The reference implementation avoids this by
+    // clearing pending state on punch-in; doing it here instead covers every
+    // punch path (app, biometric, reconciliation) rather than just one.
+    const staleSession = await GeofencePendingExit.findOne({ adminId, employeeId }).lean();
+    if (staleSession && new Date(staleSession.since) < new Date(punchInAt)) {
+        await clearConfirmation(adminId, employeeId);
+    }
 
     // On lunch = lunch started and not yet ended. Stepping out for lunch is
     // exactly the thing the fence must not react to.
@@ -274,9 +375,15 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
 
     const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
 
+    // `cached: true` fixes are excluded from the DECISION but still exist in
+    // the collection for the map and the audit trail. A coordinate the phone
+    // re-sent unchanged is one observation re-delivered; letting it occupy a
+    // slot in the deciding set is how a single stale reading captures a
+    // decision.
     const fixes = await Tracking.find({
         adminId, employeeId,
         timestamp: { $gte: new Date(punchInAt) },
+        cached: { $ne: true },
     })
         .sort({ timestamp: 1 })
         .lean();
@@ -311,10 +418,21 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
     };
 
     if (!verdict.outside) {
-        // The evidence no longer supports an exit -- back inside, or any
-        // abstention/suppression -- so any in-progress confirmation sequence
-        // is stale and must not silently combine with a later, unrelated one.
-        await clearConfirmation(adminId, employeeId);
+        // ONLY a positive "they are inside" verdict invalidates an exit in
+        // progress. An abstention means the evidence was inconclusive -- a
+        // coarse fix, a repeated coordinate, a burst that has not landed yet --
+        // which is not the same as evidence that they came back.
+        //
+        // This used to clear on ANY non-outside verdict, and that discarded
+        // real progress: on 2026-09-15 a genuine 901 m departure banked 102
+        // seconds of confirmed rounds, then one duplicate GPS row produced a
+        // single `repeated_coordinate` abstention and wiped the sequence 18
+        // seconds before it would have fired. Quiet sequences are aged out by
+        // GEOFENCE_PENDING_STALE_MS in advanceConfirmation instead, which is
+        // what the reference implementation does.
+        if (verdict.decision === 'inside') {
+            await clearConfirmation(adminId, employeeId);
+        }
         await recordAudit(auditRow);
         return verdict;
     }
@@ -334,8 +452,9 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
             reason: 'confirming',
             shadow,
             narrative:
-                `${verdict.narrative} — round ${confirmation.rounds}/${GEOFENCE_CONFIRMATIONS}, ` +
-                'awaiting independent confirmation before acting.',
+                `${verdict.narrative} — round ${confirmation.rounds}/${confirmation.needed}` +
+                (confirmation.unambiguous ? ' (unambiguous distance)' : '') +
+                ', awaiting independent confirmation before acting.',
         });
         return { decision: 'suppressed', reason: 'confirming', rounds: confirmation.rounds };
     }
@@ -422,12 +541,17 @@ async function closeSession({ attendance, user, settings, openIdx, now, verdict 
         session.punchOutDistance = verdict.evidence.distanceM;
     }
 
-    // Session 1 is also the root punch, so the root has to follow it.
-    if (openIdx === 0 || !sessions.length) {
+    // The root mirrors the day's FINAL punch-out, whichever session that is.
+    // Keying on index 0 left the root null every time a later session was the
+    // one being closed, and a null root reads as "still open" to the nightly
+    // close job, the on-duty stat, and the next punch-in attempt.
+    if (!sessions.length) {
         attendance.punchOut = closeAt;
         attendance.punchOutDistance = verdict.evidence.distanceM;
         attendance.punchOutLocation = session?.punchOutLocation || null;
         attendance.punchOutCoordinates = session?.punchOutCoordinates || null;
+    } else {
+        syncRootPunchOut(attendance);
     }
 
     // An engine close is final, not provisional: it is a deliberate decision
@@ -440,13 +564,27 @@ async function closeSession({ attendance, user, settings, openIdx, now, verdict 
     attendance.geoStatus = 'auto_exit';
 
     attendance.totalWorkMs = computeWorkedMs(attendance, user.shiftId, settings);
-    for (const s of sessions) s.workMs = computeSessionWorkMs(s, attendance, user.shiftId);
+    for (const s of sessions) {
+        s.workMs = computeSessionWorkMs(s, attendance, user.shiftId);
+        // The measured duration next to the credited one. A session outside the
+        // shift window credits zero, and without this the time it represents
+        // leaves no trace at all for the reviewer the grade below sends it to.
+        s.grossMs = computeSessionGrossMs(s);
+    }
 
     // Same grading the manual path applies, and only ever downgrading.
     const grade = gradeDay(attendance, user.shiftId, settings);
     if (grade === 'half-day' && attendance.status === 'present') {
         attendance.status = 'half-day';
     }
+    if (grade === 'absent') attendance.status = 'absent';
+
+    // A day this engine closed that still measures as nothing is OUR failure to
+    // reconstruct, not the employee's absence -- they have a punch-in on record.
+    // gradeDay already works this out; the geofence path used to compute the
+    // verdict and then discard it, so a 52-minute session that clamped to zero
+    // was stored as an ordinary half-day and never reached a human.
+    if (grade === 'needs_review') attendance.status = 'needs_review';
 
     const note = ' | Auto punch-out (left branch geo-fence)';
     if (!String(attendance.remarks || '').includes(note.trim())) {
@@ -471,4 +609,180 @@ async function closeSession({ attendance, user, settings, openIdx, now, verdict 
     return { at: closeAt };
 }
 
-module.exports = { evaluateEmployee, closeSession, recordAudit };
+// ─────────────────────────────────────────────────────────────────────────────
+//  Replaying the engine over a late-arriving backlog
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How far apart replayed evaluations sit. Matches the live 45s sync tick. */
+const REPLAY_TICK_MS = Number(process.env.GEOFENCE_REPLAY_TICK_MS) || 45 * 1000;
+
+/**
+ * Ceiling on replayed evaluations, ~90 minutes of backlog at the tick above.
+ *
+ * A phone that was off for two days would otherwise walk thousands of
+ * evaluations, each doing several queries, inside one upload request.
+ */
+const REPLAY_MAX_STEPS = Number(process.env.GEOFENCE_REPLAY_MAX_STEPS) || 120;
+
+/**
+ * Re-run the engine across the period a backlog describes.
+ *
+ * An employee who leaves the fence while their phone has no signal is invisible
+ * to the live engine: the fixes proving they left only arrive once they are
+ * back, and by then `MAX_FIX_AGE_MS` (correctly) rejects them as stale. One
+ * real case: out to 415 m for 12.7 minutes, every fix delivered in a single
+ * batch 9-24 minutes late, not one audit row written.
+ *
+ * Rather than relax that staleness gate -- which exists so a backlog can never
+ * punch out somebody who is visibly back at their desk -- this replays the
+ * SAME engine at the instants the evidence is actually about. `evaluateExit`
+ * derives its entire window from `now` (`windowStart = now - WINDOW_MS`, the
+ * age gate, the grace period) and only ever looks at fixes at or before it, so
+ * evaluating at a past instant sees exactly what the live engine would have
+ * seen then, and nothing it could not have known.
+ *
+ * That is the whole point: no second implementation of "did they leave", no
+ * separate thresholds to keep in step. The same judge, shown the evidence at
+ * the time it describes.
+ *
+ * Stepping rather than evaluating once is required, not cosmetic: a closure
+ * needs GEOFENCE_CONFIRMATIONS rounds advanced by genuinely new fixes and
+ * separated by MIN_CONFIRMATION_SPAN_MS, which a single call can never satisfy.
+ */
+async function replayEmployee({ adminId, employeeId, from, to }) {
+    const startMs = new Date(from).getTime();
+    const endMs = new Date(to).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+        return { steps: 0, closed: false, reopened: false };
+    }
+
+    let closedAt = null;
+    let steps = 0;
+    let truncated = false;
+
+    for (let t = startMs; t <= endMs; t += REPLAY_TICK_MS) {
+        if (steps >= REPLAY_MAX_STEPS) { truncated = true; break; }
+        steps += 1;
+
+        // Not wrapped per-step on purpose: if one evaluation throws, the
+        // sequence after it is built on a state we no longer understand, and
+        // guessing our way forward is worse than stopping.
+        const result = await evaluateEmployee({ adminId, employeeId, now: new Date(t) });
+
+        if (result?.closed) {
+            closedAt = result.closedAt || new Date(t);
+            break; // the session is shut; anything later belongs to the return
+        }
+        // Nothing left to decide for this session.
+        if (result?.skipped && result.reason === 'already_closed') break;
+    }
+
+    if (truncated) {
+        console.warn(
+            `[geofence] replay hit the ${REPLAY_MAX_STEPS}-step cap for employee ${employeeId}; ` +
+            'backlog older than the cap was not replayed',
+        );
+    }
+
+    const reopened = closedAt
+        ? await reopenOnReturn({ adminId, employeeId, closedAt, until: new Date(endMs) })
+        : false;
+
+    return { steps, closed: !!closedAt, closedAt, reopened, truncated };
+}
+
+/**
+ * Start a new session where the backlog shows the employee came back.
+ *
+ * Closing without this is the expensive half of the same mistake the engine is
+ * built to avoid. The replay establishes that somebody left at 15:57 -- but the
+ * same backlog usually shows them back at their desk at 16:13, and they have
+ * been working ever since. Ending the day at 15:57 and stopping there would
+ * take those hours off them for a return we can see in the record.
+ *
+ * Both edges come from real fixes. The close is the last demonstrably-inside
+ * moment; this is the first demonstrably-inside moment after it.
+ */
+async function reopenOnReturn({ adminId, employeeId, closedAt, until }) {
+    const attendance = await Attendance.findOne({
+        adminId, employeeId,
+        date: { $gte: istStartOfDay(closedAt), $lte: istEndOfDay(closedAt) },
+    });
+    if (!attendance) return false;
+
+    // Someone punched in again themselves in the meantime — the real thing
+    // always wins over a reconstruction.
+    if (openSessionIndex(attendance) !== -1) return false;
+
+    const sessions = attendance.shifts || [];
+    if (sessions.length >= MAX_SESSIONS) {
+        console.warn(`[geofence] replay: session cap reached for ${employeeId}, not reopening`);
+        return false;
+    }
+
+    const [user, settings] = await Promise.all([
+        User.findById(employeeId).populate('shiftId branchId branchIds').lean(),
+        Settings.findOne({ adminId }).lean(),
+    ]);
+    if (!user) return false;
+
+    const branches = [user.branchId, ...(user.branchIds || [])].filter(Boolean);
+    if (!branches.length) return false;
+
+    const fixes = await Tracking.find({
+        adminId, employeeId,
+        timestamp: { $gt: new Date(closedAt), $lte: new Date(until) },
+        cached: { $ne: true },
+    }).sort({ timestamp: 1 }).lean();
+
+    // The same trustworthiness bar the decision to close had to clear. A return
+    // established by a reading we would not have punched someone out on is not
+    // established at all.
+    const fallbackRadius = settings?.attendance?.officeRadius || 3000;
+    const back = fixes.find((f) => {
+        // Takes the accuracy, not the fix — same call shape geofence_window
+        // uses. Passing the object would be truthy for every reading and the
+        // accuracy gate would silently never apply.
+        if (!isTrustworthyFix(f.accuracy)) return false;
+        const { distance, radius } = nearestBranchDistance(
+            f.latitude, f.longitude, branches, fallbackRadius,
+        );
+        return distance != null && distance <= radius;
+    });
+    if (!back) return false;
+
+    attendance.shifts.push({
+        punchIn: new Date(back.timestamp),
+        punchOut: null,
+        punchInSource: 'system',
+        punchInCoordinates: { lat: back.latitude, lng: back.longitude },
+        punchInAccuracy: back.accuracy ?? null,
+    });
+
+    const note = ' | Session reopened from offline history (employee returned)';
+    if (!String(attendance.remarks || '').includes(note.trim())) {
+        attendance.remarks = (attendance.remarks || '') + note;
+    }
+
+    syncRootPunchOut(attendance);
+    await attendance.save();
+
+    logAttendanceEvent({
+        adminId, employeeId,
+        type: 'punch-in',
+        at: new Date(back.timestamp),
+        source: 'system',
+        sessionNumber: attendance.shifts.length,
+    });
+
+    return true;
+}
+
+module.exports = {
+    evaluateEmployee,
+    closeSession,
+    recordAudit,
+    replayEmployee,
+    REPLAY_TICK_MS,
+    REPLAY_MAX_STEPS,
+};

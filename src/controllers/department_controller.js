@@ -33,6 +33,8 @@ exports.getDepartments = async (req, res) => {
                     _id: 1,
                     name: 1,
                     colorCode: 1,
+                    trackingEnabled: 1,
+                    autoPunchOutEnabled: 1,
                     createdAt: 1,
                     employees: { $size: '$employees' }
                 }

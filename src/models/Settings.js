@@ -104,12 +104,26 @@ const SettingsSchema = new mongoose.Schema({
         otThreshold: { type: Number, default: 9 },
         weeklyOT: { type: Number, default: 45 },
         otMultiplier: { type: Number, default: 1.5 },
+        // How many days back an EMPLOYEE may reach when asking to correct a
+        // missed punch-out. Admins are not bound by it. Kept short on purpose:
+        // the further away the day, the less anyone actually remembers, and a
+        // correction nobody can verify is a guess with an approval stamp on it.
+        correctionWindowDays: { type: Number, default: 7 },
         // Minimum gap between two taps by the same employee on a biometric
         // terminal. A second tap inside this window is treated as an accidental
         // repeat and discarded (still stored, flagged, so it stays auditable) —
         // without it, someone arriving at 09:30 who presses twice gets a
         // punch-in and an instant "lunch break started". 0 disables.
         punchDebounceSeconds: { type: Number, default: 120 },
+        // Refuse a NEW punch-in once the employee's shift has ended. Punch-out
+        // is never blocked. Default on: a punch-in after shift end can only
+        // produce a zero-length, unpayable day (see attendance_controller's
+        // punchIn). A tenant running 24/7, or one whose shift times are
+        // nominal rather than enforced, sets this false.
+        blockPunchInAfterShiftEnd: { type: Boolean, default: true },
+        // Minutes past shift end during which a punch-in is still accepted --
+        // for a site where people genuinely start a few minutes over.
+        punchInGraceAfterShiftEndMins: { type: Number, default: 0 },
         // Punch-time rounding applied before late/half-day/payroll math runs
         // (see attendance_helpers.js's roundPunchTime).
         roundingInterval: { type: Number, default: 0 }, // minutes; 0 = off

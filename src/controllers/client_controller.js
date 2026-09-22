@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const ClientDevice = require('../models/ClientDevice');
 const ClientError = require('../models/ClientError');
+const TrackerEvent = require('../models/TrackerEvent');
 const LoginSession = require('../models/LoginSession');
 
 const { PERMISSION_STATES } = ClientDevice;
@@ -79,6 +80,13 @@ exports.reportClient = async (req, res) => {
                 // help and the second must stay distinguishable.
                 ...(req.body.trackingSetupComplete === true
                     ? { $max: { trackingSetupCompletedAt: now } }
+                    : {}),
+                // Latched for the same reason as the setup flag: having once
+                // survived a reboot is a fact about the handset's configuration,
+                // and a later report from a device that has not rebooted since
+                // must not read as the permission having gone away.
+                ...(req.body.autoStartProven === true
+                    ? { $set: { autoStartProven: true } }
                     : {}),
             },
             { new: true, upsert: true, setDefaultsOnInsert: true },
@@ -172,6 +180,181 @@ exports.reportClientError = async (req, res) => {
         });
 
         res.status(201).json({ ok: true });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// ── tracker events ───────────────────────────────────────────────
+
+const EVENT_TYPES = TrackerEvent.schema.path('type').enumValues;
+
+// Arrive in batches, so the budget counts EVENTS rather than requests — one
+// request carrying 200 rows costs the same as 200 requests carrying one. The
+// window is wider and the allowance larger than the error budget because a
+// device coming back from a day offline legitimately flushes a lot at once.
+const EVENT_WINDOW_MS = 10 * 60 * 1000;
+const EVENT_MAX_PER_WINDOW = 400;
+const eventBudget = new Map(); // employeeId -> { count, windowStart }
+
+function takeEventBudget(employeeId, wanted) {
+    const key = String(employeeId);
+    const now = Date.now();
+    const entry = eventBudget.get(key);
+
+    if (!entry || now - entry.windowStart > EVENT_WINDOW_MS) {
+        eventBudget.set(key, { count: wanted, windowStart: now });
+        if (eventBudget.size > 5000) {
+            for (const [k, v] of eventBudget) {
+                if (now - v.windowStart > EVENT_WINDOW_MS) eventBudget.delete(k);
+            }
+        }
+        return wanted;
+    }
+
+    // Partial grants rather than all-or-nothing: dropping a whole flush because
+    // it overshot by two rows loses the transition that explains the outage.
+    const room = Math.max(0, EVENT_MAX_PER_WINDOW - entry.count);
+    const granted = Math.min(room, wanted);
+    entry.count += granted;
+    return granted;
+}
+
+/**
+ * POST /api/client/events
+ *
+ * A batch of device-state transitions from one install. Written by the phone on
+ * an unprivileged route, so every field is re-derived or whitelisted here and
+ * nothing the client sends decides who the row belongs to.
+ *
+ * Always 2xx. The app posts this from a background sync loop and deletes its
+ * local copy on success; a 4xx for one malformed row would make it retry the
+ * whole batch forever. Unrecognised rows are counted and dropped, and the count
+ * comes back so a bad build is visible without a server log.
+ */
+exports.reportTrackerEvents = async (req, res) => {
+    try {
+        const incoming = Array.isArray(req.body.events) ? req.body.events : [];
+        if (incoming.length === 0) return res.json({ ok: true, accepted: 0 });
+
+        // Hard ceiling before anything else, so an absurd payload cannot make us
+        // allocate its size in memory.
+        const capped = incoming.slice(0, 500);
+        const installId = str(req.body.installId, 64);
+        const appVersion = str(req.body.appVersion, 32);
+
+        const now = Date.now();
+        const rows = [];
+        let rejected = 0;
+
+        for (const raw of capped) {
+            if (!raw || typeof raw !== 'object') { rejected += 1; continue; }
+            if (!EVENT_TYPES.includes(raw.type)) { rejected += 1; continue; }
+
+            // A phone's clock can be wrong in both directions. Anything more
+            // than a day in the future is nonsense and would sort above real
+            // events forever; more than 30 days old outlives the TTL anyway.
+            const at = new Date(raw.at);
+            if (Number.isNaN(at.getTime())) { rejected += 1; continue; }
+            const age = now - at.getTime();
+            if (age < -24 * 60 * 60 * 1000 || age > 30 * 24 * 60 * 60 * 1000) {
+                rejected += 1;
+                continue;
+            }
+
+            const battery = Number(raw.batteryLevel);
+
+            rows.push({
+                adminId: req.adminId,
+                employeeId: req.userId,   // never from the body — see tracking_controller
+                installId,
+                appVersion,
+                type: raw.type,
+                at,
+                // Serialised and re-parsed to strip anything exotic and to bound
+                // the size; Mixed would otherwise store whatever arrived.
+                meta: sanitiseMeta(raw.meta),
+                batteryLevel: Number.isFinite(battery)
+                    ? Math.max(0, Math.min(100, Math.round(battery)))
+                    : null,
+                charging: typeof raw.charging === 'boolean' ? raw.charging : null,
+            });
+        }
+
+        const granted = takeEventBudget(req.userId, rows.length);
+        const toWrite = granted >= rows.length ? rows : rows.slice(0, granted);
+
+        if (toWrite.length > 0) {
+            // ordered:false so one bad row cannot discard the rest of the batch.
+            await TrackerEvent.insertMany(toWrite, { ordered: false });
+        }
+
+        res.status(201).json({
+            ok: true,
+            accepted: toWrite.length,
+            rejected,
+            dropped: rows.length - toWrite.length,
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+/** Bound and flatten client-supplied meta. One level deep, scalars only. */
+function sanitiseMeta(meta) {
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+    const out = {};
+    let n = 0;
+    for (const [k, v] of Object.entries(meta)) {
+        if (n >= 12) break;
+        if (v === null || v === undefined) continue;
+        const t = typeof v;
+        if (t === 'number' || t === 'boolean') out[String(k).slice(0, 40)] = v;
+        else if (t === 'string') out[String(k).slice(0, 40)] = v.slice(0, 200);
+        else continue;
+        n += 1;
+    }
+    return n > 0 ? out : null;
+}
+
+/**
+ * GET /api/client/events?employeeId=&from=&to=&limit=&types=
+ *
+ * One employee's device timeline. `employeeId` is required: a tenant-wide feed
+ * of every phone's GPS toggles is thousands of rows answering no question
+ * anyone asks, and the UI that reads this is always looking at one person.
+ */
+exports.getTrackerEvents = async (req, res) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(req.query.employeeId || '')) {
+            return res.status(400).json({ message: 'employeeId is required' });
+        }
+
+        const filter = {
+            adminId: new mongoose.Types.ObjectId(req.adminId),
+            employeeId: new mongoose.Types.ObjectId(req.query.employeeId),
+        };
+
+        const from = req.query.from ? new Date(req.query.from) : null;
+        const to = req.query.to ? new Date(req.query.to) : null;
+        if ((from && !Number.isNaN(from.getTime())) || (to && !Number.isNaN(to.getTime()))) {
+            filter.at = {};
+            if (from && !Number.isNaN(from.getTime())) filter.at.$gte = from;
+            if (to && !Number.isNaN(to.getTime())) filter.at.$lte = to;
+        }
+
+        if (req.query.types) {
+            const wanted = String(req.query.types).split(',').filter((t) => EVENT_TYPES.includes(t));
+            if (wanted.length > 0) filter.type = { $in: wanted };
+        }
+
+        const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+        const events = await TrackerEvent.find(filter)
+            .sort({ at: -1 })
+            .limit(limit)
+            .lean();
+
+        res.json(events);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

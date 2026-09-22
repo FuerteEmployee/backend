@@ -451,7 +451,9 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
 // later bulk regenerate can't silently drop an already-included recovery.
 exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceRequestIds = [], expenseIds = []) => {
     const existing = await Salary.findOne({ adminId, employeeId: emp._id, month, year })
-        .select('deductedAdvanceRequestIds reimbursedExpenseIds')
+        // `status paidAt paidBy` ride along on the read this function already
+        // does -- see the paid-record guard at the findOneAndUpdate below.
+        .select('deductedAdvanceRequestIds reimbursedExpenseIds status paidAt paidBy')
         .lean();
     const existingIds = (existing?.deductedAdvanceRequestIds || []).map(String);
     const allAdvanceIds = Array.from(new Set([...existingIds, ...advanceRequestIds.map(String)]));
@@ -528,6 +530,30 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
             needsReview,
             status: needsReview ? 'review' : status,
         });
+    }
+
+    // ── A paid record keeps its payment ──────────────────────────────────────
+    //
+    // Everything above recomputes this month from scratch, INCLUDING `status`
+    // (derived at the top from "is this the current month?", and again from
+    // needsReview). Left alone, one click of "Generate Payroll" -- which loops
+    // every active employee with no filter -- rewrote every 'paid' row to
+    // 'pending'/'final'/'review'. The money had left the company and the system
+    // no longer said so.
+    //
+    // This is the same care already taken two fields up for
+    // deductedAdvanceRequestIds and reimbursedExpenseIds, which are merged from
+    // `existing` precisely so a bulk regenerate cannot silently drop a recovery
+    // an earlier run already applied. Payment simply never got it.
+    //
+    // Note this guards the PAYMENT only. Every computed figure -- gross, net,
+    // buckets, deductions, payable days -- is still rewritten, so regenerating
+    // a paid month still corrects its arithmetic and still surfaces a
+    // needsReview problem in `remarks`. What it will not do is forget that
+    // somebody was paid.
+    if (existing?.status === 'paid') {
+        delete update.status;
+        update.remarks = `${update.remarks || ''} | Recomputed after payment; payment status preserved`.trim();
     }
 
     const saved = await Salary.findOneAndUpdate(
@@ -647,12 +673,45 @@ exports.getMonthlyReport = async (req, res) => {
     }
 };
 
+// Fields an admin is allowed to change by hand on a generated payslip.
+//
+// A whitelist rather than `req.body`, because this handler used to pass the
+// request body straight into findOneAndUpdate: anything the caller sent was
+// written, including the engine's own audit fields (buckets, payableDays,
+// needsReview, dailyRateBasis) and the tenant key itself. Those are outputs of
+// the payroll engine and the only thing that should ever write them is a run of
+// it -- an edit that quietly rewrites `buckets` makes the day-sum invariant
+// unverifiable after the fact, which is the one property the engine exists to
+// guarantee.
+const SALARY_EDITABLE_FIELDS = ['status', 'bonus', 'deductions', 'remarks', 'totalSalary', 'netSalary'];
+
 exports.updateSalary = async (req, res) => {
     try {
+        const update = {};
+        for (const key of SALARY_EDITABLE_FIELDS) {
+            if (req.body[key] !== undefined) update[key] = req.body[key];
+        }
+
+        // Marking a row paid is the one transition that has to leave a trace.
+        // `status` alone cannot be that trace -- payroll generation recomputes
+        // it -- so stamp who paid it and when, and let those outlive any later
+        // regenerate. See the paid-record guard in calculateAndSaveSalary.
+        if (update.status === 'paid') {
+            const existing = await Salary.findOne({ _id: req.params.id, adminId: req.adminId })
+                .select('paidAt')
+                .lean();
+            // Only on the transition INTO paid, so re-saving an already-paid row
+            // keeps the original payment date rather than moving it to today.
+            if (!existing?.paidAt) {
+                update.paidAt = new Date();
+                update.paidBy = req.userId;
+            }
+        }
+
         const salary = await Salary.findOneAndUpdate(
             { _id: req.params.id, adminId: req.adminId },
-            req.body,
-            { new: true }
+            update,
+            { new: true, runValidators: true }
         );
         if (!salary) return res.status(404).json({ message: 'Salary record not found' });
         res.json(salary);
@@ -664,6 +723,22 @@ exports.updateSalary = async (req, res) => {
 exports.deleteSalary = async (req, res) => {
     try {
         const { id } = req.params;
+
+        // Deleting a paid payslip destroys the only record that the payment
+        // happened, and there is no undo anywhere in this flow. Refuse it and
+        // make the caller undo the payment first -- that way the decision to
+        // discard a payment record is explicit and separately auditable,
+        // instead of a side effect of tidying up a salary list.
+        const existing = await Salary.findOne({ _id: id, adminId: req.adminId })
+            .select('status paidAt')
+            .lean();
+        if (!existing) return res.status(404).json({ message: 'Salary record not found' });
+        if (existing.status === 'paid' || existing.paidAt) {
+            return res.status(409).json({
+                message: 'This payslip is marked paid and cannot be deleted. Change its status first if the payment was recorded in error.',
+            });
+        }
+
         await Salary.findOneAndDelete({
             _id: id,
             adminId: req.adminId

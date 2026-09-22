@@ -48,12 +48,25 @@ const GeofenceAuditSchema = new mongoose.Schema({
             'no_trustworthy_fix',
             'within_buffer',
             'stale_fixes',
+            // A marginal exit (inside 3x the threshold) that has not yet
+            // accumulated the longer evidence window such a distance demands.
+            // Omitting it made every one of these audit writes fail validation,
+            // so the decisions vanished — and the whole point of this trail is
+            // that an engine which logs only its closures cannot be shown to be
+            // working, because silence is indistinguishable from broken.
+            'marginal_window_too_short',
             // outside the fence, but not yet confirmed across enough rounds
             'confirming',
             // suppressed -- a rule says do not act, regardless of evidence
             'grace_period',
             'role_exempt',
+            // The DAY was declared Work From Home. Distinct from role_exempt,
+            // which is a standing property of the employee: this one is a
+            // choice made at punch-in and true only for that day.
+            'work_from_home',
             'fence_disabled',
+            // The employee's department has not opted into auto punch-out.
+            'department_disabled',
             'no_branch',
             'on_lunch',
             'not_punched_in',

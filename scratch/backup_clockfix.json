@@ -1,0 +1,3064 @@
+{
+  "takenAt": "2026-09-12T13:13:48.994Z",
+  "taps": [
+    {
+      "_id": "6aa3babe5843243cc6d79fe1",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-11",
+      "deviceTime": "2026-09-11T02:54:28.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": "punch-in",
+      "receivedAt": "2026-09-11T08:24:30.504Z",
+      "createdAt": "2026-09-11T08:24:30.505Z",
+      "updatedAt": "2026-09-11T08:24:30.551Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa3bb165843243cc6d7a588",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-11",
+      "deviceTime": "2026-09-11T02:55:56.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": true,
+      "discardReason": "debounced",
+      "derivedAction": null,
+      "receivedAt": "2026-09-11T08:25:58.592Z",
+      "createdAt": "2026-09-11T08:25:58.593Z",
+      "updatedAt": "2026-09-11T08:25:58.593Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa4d2dc5843243cc6d7feea",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-11T22:48:44.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": "punch-in",
+      "receivedAt": "2026-09-12T04:19:40.395Z",
+      "createdAt": "2026-09-12T04:19:40.396Z",
+      "updatedAt": "2026-09-12T12:14:56.372Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa4d37a5843243cc6d809ed",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-11T22:52:16.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": null,
+      "receivedAt": "2026-09-12T04:22:18.192Z",
+      "createdAt": "2026-09-12T04:22:18.193Z",
+      "updatedAt": "2026-09-12T12:14:56.372Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa4d3e55843243cc6d81162",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-11T22:54:03.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": true,
+      "discardReason": "debounced",
+      "derivedAction": null,
+      "receivedAt": "2026-09-12T04:24:05.320Z",
+      "createdAt": "2026-09-12T04:24:05.320Z",
+      "updatedAt": "2026-09-12T04:24:05.320Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa4d5465843243cc6d8228c",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-11T22:59:56.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": null,
+      "receivedAt": "2026-09-12T04:29:58.658Z",
+      "createdAt": "2026-09-12T04:29:58.659Z",
+      "updatedAt": "2026-09-12T12:14:56.372Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa538435843243cc6d89fc6",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-12T06:02:17.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": null,
+      "receivedAt": "2026-09-12T11:32:19.352Z",
+      "createdAt": "2026-09-12T11:32:19.352Z",
+      "updatedAt": "2026-09-12T12:14:56.372Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa542402ea2f62fa4ddfb3e",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-12T06:44:54.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": "punch-out",
+      "receivedAt": "2026-09-12T12:14:56.329Z",
+      "createdAt": "2026-09-12T12:14:56.330Z",
+      "updatedAt": "2026-09-12T12:14:56.372Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa542632ea2f62fa4ddfe7e",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-12T06:45:28.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "1",
+      "source": "biometric",
+      "discarded": true,
+      "discardReason": "debounced",
+      "derivedAction": null,
+      "receivedAt": "2026-09-12T12:15:31.106Z",
+      "createdAt": "2026-09-12T12:15:31.106Z",
+      "updatedAt": "2026-09-12T12:15:31.106Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa54b922ea2f62fa4de1e16",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6aa54a7a2ea2f62fa4de191c",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-12T07:24:40.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "12",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": "punch-in",
+      "receivedAt": "2026-09-12T12:54:42.370Z",
+      "createdAt": "2026-09-12T12:54:42.371Z",
+      "updatedAt": "2026-09-12T13:13:35.945Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa54ebe2ea2f62fa4de2d92",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6aa54a7a2ea2f62fa4de191c",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-12T07:38:12.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "12",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": null,
+      "receivedAt": "2026-09-12T13:08:14.374Z",
+      "createdAt": "2026-09-12T13:08:14.375Z",
+      "updatedAt": "2026-09-12T13:13:35.945Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa54ffffd54e8d8b3bfd4f9",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6aa54a7a2ea2f62fa4de191c",
+      "dayKey": "2026-09-12",
+      "deviceTime": "2026-09-12T13:13:34.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "12",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": "punch-out",
+      "receivedAt": "2026-09-12T13:13:35.898Z",
+      "createdAt": "2026-09-12T13:13:35.901Z",
+      "updatedAt": "2026-09-12T13:13:35.945Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa3ecb65843243cc6d7b5ca",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "dayKey": "2026-09-11",
+      "deviceTime": "2026-09-11T06:27:39.000Z",
+      "serialNumber": "EUF7254400194",
+      "pin": "3",
+      "source": "biometric",
+      "discarded": false,
+      "discardReason": null,
+      "derivedAction": "punch-in",
+      "receivedAt": "2026-09-11T11:57:42.059Z",
+      "createdAt": "2026-09-11T11:57:42.060Z",
+      "updatedAt": "2026-09-11T11:57:42.121Z",
+      "__v": 0
+    }
+  ],
+  "attendance": [
+    {
+      "_id": "6a699bf722fb9ccc54121a9c",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-07-29T00:00:00.000Z",
+      "punchIn": "2026-07-29T06:21:43.680Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-07-29T07:24:24.634Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-07-29T06:21:43.680Z",
+          "_id": "6a699bf722fb9ccc54121a9d",
+          "punchOut": "2026-07-29T06:21:48.816Z"
+        },
+        {
+          "punchIn": "2026-07-29T06:21:53.833Z",
+          "_id": "6a699c0122fb9ccc54121acb",
+          "punchOut": "2026-07-29T06:24:07.152Z"
+        },
+        {
+          "punchIn": "2026-07-29T06:24:13.523Z",
+          "_id": "6a699c8d22fb9ccc54121b5d",
+          "punchOut": "2026-07-29T06:24:34.225Z"
+        },
+        {
+          "punchIn": "2026-07-29T06:24:46.715Z",
+          "_id": "6a699cae22fb9ccc54121b9c",
+          "punchOut": "2026-07-29T06:27:30.590Z"
+        },
+        {
+          "punchIn": "2026-07-29T06:28:17.372Z",
+          "_id": "6a699d8122fb9ccc54121db5",
+          "punchOut": "2026-07-29T06:28:22.406Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:22:14.400Z",
+          "_id": "6a69aa2622fb9ccc541225f3",
+          "punchOut": "2026-07-29T07:22:19.497Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:22:24.723Z",
+          "_id": "6a69aa3022fb9ccc5412282c",
+          "punchOut": "2026-07-29T07:22:29.987Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:22:35.090Z",
+          "_id": "6a69aa3b22fb9ccc541228c6",
+          "punchOut": "2026-07-29T07:22:42.818Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:23:01.078Z",
+          "_id": "6a69aa5522fb9ccc54122989",
+          "punchOut": "2026-07-29T07:23:08.050Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:23:14.195Z",
+          "_id": "6a69aa6222fb9ccc541229f6",
+          "punchOut": "2026-07-29T07:23:27.092Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:23:35.392Z",
+          "_id": "6a69aa7722fb9ccc54122a91",
+          "punchOut": "2026-07-29T07:23:40.644Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:23:46.423Z",
+          "_id": "6a69aa8222fb9ccc54122adb",
+          "punchOut": "2026-07-29T07:23:51.519Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:23:56.826Z",
+          "_id": "6a69aa8c22fb9ccc54122b88",
+          "punchOut": "2026-07-29T07:24:02.934Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:24:08.014Z",
+          "_id": "6a69aa9822fb9ccc54122c0c",
+          "punchOut": "2026-07-29T07:24:13.370Z"
+        },
+        {
+          "punchIn": "2026-07-29T07:24:19.558Z",
+          "_id": "6a69aaa322fb9ccc54122c5d",
+          "punchOut": "2026-07-29T07:24:24.634Z"
+        }
+      ],
+      "totalWorkMs": 392912,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-07-29T06:21:43.702Z",
+      "updatedAt": "2026-07-29T07:24:24.660Z",
+      "__v": 14,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a6c6af8651dd66e8820ebc0",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-07-31T00:00:00.000Z",
+      "punchIn": "2026-07-31T09:29:28.418Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-07-31T10:35:37.369Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-07-31T09:29:28.418Z",
+          "_id": "6a6c6af8651dd66e8820ebc1",
+          "punchOut": "2026-07-31T09:30:04.012Z"
+        },
+        {
+          "punchIn": "2026-07-31T09:34:12.834Z",
+          "_id": "6a6c6c14651dd66e8820ecd1",
+          "punchOut": "2026-07-31T09:34:27.761Z"
+        },
+        {
+          "punchIn": "2026-07-31T09:51:40.700Z",
+          "_id": "6a6c702c651dd66e8820ee89",
+          "punchOut": "2026-07-31T10:35:37.369Z"
+        }
+      ],
+      "totalWorkMs": 2687190,
+      "remarks": " | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Multiple shifts | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-07-31T09:29:28.443Z",
+      "updatedAt": "2026-07-31T10:35:37.395Z",
+      "__v": 2,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a6c76ef651dd66e8820f1f9",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-07-31T00:00:00.000Z",
+      "punchIn": "2026-07-31T10:20:31.953Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-07-31T10:45:02.125Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-07-31T10:20:31.953Z",
+          "_id": "6a6c76ef651dd66e8820f1fa",
+          "punchOut": "2026-07-31T10:45:02.125Z"
+        }
+      ],
+      "totalWorkMs": 1470172,
+      "remarks": " | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-07-31T10:20:31.976Z",
+      "updatedAt": "2026-07-31T10:45:02.190Z",
+      "__v": 0,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a6dcdc7651dd66e88211682",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-01T00:00:00.000Z",
+      "punchIn": "2026-08-01T10:43:18.535Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.319353100344053,
+        "lng": 70.76752452589375
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1785580999/attendance/aet1rrs3iyn8xflkzzbs.jpg",
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-01T10:43:30.305Z",
+      "lunchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "lunchOutTime": "2026-08-01T10:43:36.902Z",
+      "lunchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInDistance": 55,
+      "punchOutDistance": null,
+      "lunchInDistance": 55,
+      "lunchOutDistance": 55,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-01T10:43:18.535Z",
+          "_id": "6a6dcdc7651dd66e88211683",
+          "punchOut": "2026-08-01T13:06:33.129Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:06:46.018Z",
+          "_id": "6a6def66651dd66e88211e98",
+          "punchOut": "2026-08-01T13:07:39.731Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:10:42.301Z",
+          "_id": "6a6df052651dd66e8821213d",
+          "punchOut": "2026-08-01T13:10:52.841Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:10:59.414Z",
+          "_id": "6a6df063651dd66e88212194",
+          "punchOut": "2026-08-01T13:11:05.648Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:11:23.011Z",
+          "_id": "6a6df07b651dd66e882121e0",
+          "punchOut": "2026-08-01T13:11:28.103Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:11:33.174Z",
+          "_id": "6a6df085651dd66e88212217",
+          "punchOut": "2026-08-01T13:11:38.370Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:13:34.483Z",
+          "_id": "6a6df0fe651dd66e882123a3",
+          "punchOut": "2026-08-01T13:24:46.842Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:24:52.125Z",
+          "_id": "6a6df3a4651dd66e88212598",
+          "punchOut": "2026-08-01T13:24:57.205Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:02.757Z",
+          "_id": "6a6df3ae651dd66e8821264b",
+          "punchOut": "2026-08-01T13:25:07.921Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:13.081Z",
+          "_id": "6a6df3b9651dd66e8821272a",
+          "punchOut": "2026-08-01T13:25:18.392Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:23.917Z",
+          "_id": "6a6df3c3651dd66e882127d6",
+          "punchOut": "2026-08-01T13:25:31.141Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:37.315Z",
+          "_id": "6a6df3d1651dd66e882128d3",
+          "punchOut": "2026-08-01T13:25:42.717Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:02.514Z",
+          "_id": "6a6df3ea651dd66e882129f3",
+          "punchOut": "2026-08-01T13:26:07.981Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:13.069Z",
+          "_id": "6a6df3f5651dd66e88212a61",
+          "punchOut": "2026-08-01T13:26:18.258Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:23.346Z",
+          "_id": "6a6df3ff651dd66e88212b89",
+          "punchOut": "2026-08-01T13:26:28.434Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:33.636Z",
+          "_id": "6a6df409651dd66e88212cd3",
+          "punchOut": "2026-08-01T13:26:39.332Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:44.362Z",
+          "_id": "6a6df414651dd66e88212e0d",
+          "punchOut": "2026-08-01T13:26:49.636Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:54.760Z",
+          "_id": "6a6df41e651dd66e88212f41",
+          "punchOut": "2026-08-01T13:26:59.860Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:27:07.605Z",
+          "_id": "6a6df42b651dd66e8821302d",
+          "punchOut": "2026-08-01T13:27:12.906Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:27:21.649Z",
+          "_id": "6a6df439651dd66e8821312f",
+          "punchOut": "2026-08-01T13:27:26.786Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:27:35.119Z",
+          "_id": "6a6df447651dd66e88213310",
+          "punchOut": "2026-08-01T13:27:44.987Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:33:05.192Z",
+          "_id": "6a6df591651dd66e88213855",
+          "punchOut": "2026-08-01T13:34:23.961Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:35:08.449Z",
+          "_id": "6a6df60c651dd66e88213b0a"
+        }
+      ],
+      "totalWorkMs": 9506798,
+      "remarks": " | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Multiple shifts | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-01T10:43:19.938Z",
+      "updatedAt": "2026-08-01T13:35:08.476Z",
+      "__v": 22,
+      "lunchInCoordinates": {
+        "lat": 22.319353100344053,
+        "lng": 70.76752452589375
+      },
+      "lunchOutCoordinates": {
+        "lat": 22.319353100344053,
+        "lng": 70.76752452589375
+      },
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a6df0f9651dd66e8821234e",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-01T00:00:00.000Z",
+      "punchIn": "2026-08-01T13:13:29.264Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-01T13:35:02.807Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-01T13:13:29.264Z",
+          "_id": "6a6df0f9651dd66e8821234f",
+          "punchOut": "2026-08-01T13:13:31.725Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:13:39.993Z",
+          "_id": "6a6df104651dd66e882123c8",
+          "punchOut": "2026-08-01T13:24:39.780Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:24:46.246Z",
+          "_id": "6a6df39e651dd66e88212510",
+          "punchOut": "2026-08-01T13:24:51.376Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:24:56.517Z",
+          "_id": "6a6df3a8651dd66e882125a9",
+          "punchOut": "2026-08-01T13:25:02.672Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:07.808Z",
+          "_id": "6a6df3b3651dd66e88212692",
+          "punchOut": "2026-08-01T13:25:12.998Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:19.875Z",
+          "_id": "6a6df3bf651dd66e8821279f",
+          "punchOut": "2026-08-01T13:25:26.137Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:38.912Z",
+          "_id": "6a6df3d2651dd66e882128e6",
+          "punchOut": "2026-08-01T13:25:43.965Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:25:49.201Z",
+          "_id": "6a6df3dd651dd66e8821297f",
+          "punchOut": "2026-08-01T13:25:56.182Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:01.435Z",
+          "_id": "6a6df3e9651dd66e882129d7",
+          "punchOut": "2026-08-01T13:26:20.879Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:26.135Z",
+          "_id": "6a6df402651dd66e88212c0e",
+          "punchOut": "2026-08-01T13:26:31.128Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:36.321Z",
+          "_id": "6a6df40c651dd66e88212d57",
+          "punchOut": "2026-08-01T13:26:45.956Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:26:54.006Z",
+          "_id": "6a6df41e651dd66e88212f21",
+          "punchOut": "2026-08-01T13:27:09.739Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:27:15.738Z",
+          "_id": "6a6df433651dd66e882130eb",
+          "punchOut": "2026-08-01T13:27:22.494Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:27:27.493Z",
+          "_id": "6a6df43f651dd66e8821321a",
+          "punchOut": "2026-08-01T13:27:33.952Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:27:46.285Z",
+          "_id": "6a6df452651dd66e88213374",
+          "punchOut": "2026-08-01T13:27:57.011Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:29:01.703Z",
+          "_id": "6a6df49d651dd66e8821348c",
+          "punchOut": "2026-08-01T13:29:06.926Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:32:54.336Z",
+          "_id": "6a6df586651dd66e882137f6",
+          "punchOut": "2026-08-01T13:32:59.392Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:34:08.840Z",
+          "_id": "6a6df5d0651dd66e88213995",
+          "punchOut": "2026-08-01T13:34:14.760Z"
+        },
+        {
+          "punchIn": "2026-08-01T13:34:57.427Z",
+          "_id": "6a6df601651dd66e88213aa5",
+          "punchOut": "2026-08-01T13:35:02.807Z"
+        }
+      ],
+      "totalWorkMs": 792344,
+      "remarks": " | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Multiple shifts | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-01T13:13:29.287Z",
+      "updatedAt": "2026-08-01T13:35:02.834Z",
+      "__v": 18,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a7030a22eec764df5ac8845",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-03T00:00:00.000Z",
+      "punchIn": "2026-08-03T06:09:38.610Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-03T09:16:04.672Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-03T06:09:38.610Z",
+          "_id": "6a7030a22eec764df5ac8846",
+          "punchOut": "2026-08-03T06:09:38.715Z"
+        },
+        {
+          "punchIn": "2026-08-03T06:09:38.848Z",
+          "_id": "6a7030a22eec764df5ac8886",
+          "punchOut": "2026-08-03T06:09:38.928Z"
+        },
+        {
+          "punchIn": "2026-08-03T06:09:38.994Z",
+          "_id": "6a7030a32eec764df5ac88c9",
+          "punchOut": "2026-08-03T06:10:58.690Z"
+        },
+        {
+          "punchIn": "2026-08-03T06:31:24.312Z",
+          "_id": "6a7035bc2eec764df5ac8b64",
+          "punchOut": "2026-08-03T09:14:00.524Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:14:00.669Z",
+          "_id": "6a705bd8068e46cde891f2eb",
+          "punchOut": "2026-08-03T09:14:05.697Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:14:11.296Z",
+          "_id": "6a705be3068e46cde891f33d",
+          "punchOut": "2026-08-03T09:14:16.650Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:14:21.816Z",
+          "_id": "6a705bed068e46cde891f39e",
+          "punchOut": "2026-08-03T09:14:26.881Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:14:32.217Z",
+          "_id": "6a705bf8068e46cde891f3f2",
+          "punchOut": "2026-08-03T09:14:37.293Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:14:42.394Z",
+          "_id": "6a705c02068e46cde891f491",
+          "punchOut": "2026-08-03T09:14:48.289Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:14:53.524Z",
+          "_id": "6a705c0d068e46cde891f500",
+          "punchOut": "2026-08-03T09:14:58.646Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:15:08.901Z",
+          "_id": "6a705c1c068e46cde891f55e",
+          "punchOut": "2026-08-03T09:15:15.319Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:15:22.126Z",
+          "_id": "6a705c2a068e46cde891f625",
+          "punchOut": "2026-08-03T09:15:27.219Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:15:32.266Z",
+          "_id": "6a705c34068e46cde891f69c",
+          "punchOut": "2026-08-03T09:15:37.370Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:15:42.437Z",
+          "_id": "6a705c3e068e46cde891f73e",
+          "punchOut": "2026-08-03T09:15:50.405Z"
+        },
+        {
+          "punchIn": "2026-08-03T09:15:55.463Z",
+          "_id": "6a705c4b068e46cde891f7ac",
+          "punchOut": "2026-08-03T09:16:04.672Z"
+        }
+      ],
+      "totalWorkMs": 9901425,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-03T06:09:38.666Z",
+      "updatedAt": "2026-08-03T09:16:04.694Z",
+      "__v": 14,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a705bea068e46cde891f387",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-03T00:00:00.000Z",
+      "punchIn": "2026-08-03T09:14:18.083Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-03T12:31:54.977Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-03T12:30:38.371Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-03T12:30:46.690Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-03T09:14:18.083Z",
+          "_id": "6a705bea068e46cde891f388",
+          "punchOut": "2026-08-03T09:15:21.369Z"
+        },
+        {
+          "punchIn": "2026-08-03T10:13:20.351Z",
+          "_id": "6a7069c0068e46cde8921c6c",
+          "punchOut": "2026-08-03T12:31:54.977Z"
+        }
+      ],
+      "totalWorkMs": 8377912,
+      "remarks": " | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15) | Multiple shifts | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-03T09:14:18.112Z",
+      "updatedAt": "2026-08-03T12:31:55.017Z",
+      "__v": 1,
+      "punchOutCoordinates": null,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null
+    },
+    {
+      "_id": "6a72b9dd068e46cde8925241",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-05T00:00:00.000Z",
+      "punchIn": "2026-08-05T04:19:41.041Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-05T05:14:09.564Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-05T04:19:41.123Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-05T04:25:43.740Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-05T04:19:41.041Z",
+          "_id": "6a72b9dd068e46cde8925242",
+          "punchOut": "2026-08-05T05:14:09.564Z"
+        }
+      ],
+      "totalWorkMs": 3268523,
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-05T04:19:41.066Z",
+      "updatedAt": "2026-08-05T05:14:09.585Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a72bb98068e46cde8925505",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-05T00:00:00.000Z",
+      "punchIn": "2026-08-05T04:27:04.369Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-05T12:41:51.691Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-05T05:13:18.303Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-05T12:41:43.620Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-05T04:27:04.369Z",
+          "_id": "6a72bb98068e46cde8925506",
+          "punchOut": "2026-08-05T12:41:51.691Z"
+        }
+      ],
+      "totalWorkMs": 29687322,
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-05T04:27:04.391Z",
+      "updatedAt": "2026-08-05T12:41:51.715Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a74096bbfb87db4d0ccb7d9",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-06T00:00:00.000Z",
+      "punchIn": "2026-08-06T04:11:23.242Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-06T04:17:15.485Z",
+      "lunchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "lunchOutTime": "2026-08-06T09:04:37.983Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": 53,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-06T04:11:23.242Z",
+          "_id": "6a74096bbfb87db4d0ccb7da",
+          "punchOut": "2026-08-06T10:31:45.197Z"
+        },
+        {
+          "punchIn": "2026-08-06T12:41:25.123Z",
+          "_id": "6a7480f5bfb87db4d0cd10dd"
+        }
+      ],
+      "totalWorkMs": 22821955,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts",
+      "createdAt": "2026-08-06T04:11:23.268Z",
+      "updatedAt": "2026-08-06T12:41:25.146Z",
+      "__v": 1,
+      "lunchInCoordinates": {
+        "lat": 22.319374306328385,
+        "lng": 70.76747853732626
+      },
+      "lunchOutCoordinates": null,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a740971bfb87db4d0ccb7eb",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-06T00:00:00.000Z",
+      "punchIn": "2026-08-06T04:11:29.162Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-06T14:48:50.574Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-06T07:31:40.729Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-06T09:04:30.075Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-06T04:11:29.162Z",
+          "_id": "6a740971bfb87db4d0ccb7ec",
+          "punchOut": "2026-08-06T11:02:12.109Z"
+        },
+        {
+          "punchIn": "2026-08-06T12:41:06.625Z",
+          "_id": "6a7480e2bfb87db4d0cd104f",
+          "punchOut": "2026-08-06T14:48:50.574Z"
+        }
+      ],
+      "totalWorkMs": 32306896,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-06T04:11:29.188Z",
+      "updatedAt": "2026-08-06T14:48:50.602Z",
+      "__v": 1,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a755b70bfb87db4d0cd405f",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-07T00:00:00.000Z",
+      "punchIn": "2026-08-07T04:13:36.213Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-07T13:02:42.451Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-07T08:56:05.911Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-07T13:02:39.381Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-07T04:13:36.213Z",
+          "_id": "6a755b70bfb87db4d0cd4060",
+          "punchOut": "2026-08-07T13:02:42.451Z"
+        }
+      ],
+      "totalWorkMs": 31746238,
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-07T04:13:36.233Z",
+      "updatedAt": "2026-08-07T13:02:42.471Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a755b93bfb87db4d0cd409f",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-07T00:00:00.000Z",
+      "punchIn": "2026-08-07T04:14:11.924Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-07T13:02:23.661Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-07T04:14:11.924Z",
+          "_id": "6a755b93bfb87db4d0cd40a0"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-07T04:14:11.944Z",
+      "updatedAt": "2026-08-07T13:02:23.662Z",
+      "__v": 0,
+      "lunchInCoordinates": null
+    },
+    {
+      "_id": "6a76abdfbfb87db4d0cdc7c8",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-08T00:00:00.000Z",
+      "punchIn": "2026-08-08T04:09:03.012Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-08T13:04:20.381Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-08T04:09:03.012Z",
+          "_id": "6a76abdfbfb87db4d0cdc7c9",
+          "punchOut": "2026-08-08T06:09:45.994Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:12:56.472Z",
+          "_id": "6a76c8e8bfb87db4d0cdd226",
+          "punchOut": "2026-08-08T06:14:20.229Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:14:33.211Z",
+          "_id": "6a76c949bfb87db4d0cdd54a",
+          "punchOut": "2026-08-08T06:14:38.606Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:14:44.121Z",
+          "_id": "6a76c954bfb87db4d0cdd5d2",
+          "punchOut": "2026-08-08T06:14:49.390Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:14:54.455Z",
+          "_id": "6a76c95ebfb87db4d0cdd67f",
+          "punchOut": "2026-08-08T06:14:59.488Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:15:04.548Z",
+          "_id": "6a76c968bfb87db4d0cdd6fc",
+          "punchOut": "2026-08-08T06:15:10.255Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:15:17.380Z",
+          "_id": "6a76c975bfb87db4d0cdd768",
+          "punchOut": "2026-08-08T06:15:22.435Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:24:20.873Z",
+          "_id": "6a76cb94bfb87db4d0cdd8d9"
+        }
+      ],
+      "totalWorkMs": 7353198,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-08T04:09:03.039Z",
+      "updatedAt": "2026-08-08T13:04:20.382Z",
+      "__v": 7,
+      "punchOutCoordinates": null,
+      "lunchInCoordinates": null
+    },
+    {
+      "_id": "6a76abe8bfb87db4d0cdc7d9",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-08T00:00:00.000Z",
+      "punchIn": "2026-08-08T04:09:12.632Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-08T13:04:29.474Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-08T04:09:15.569Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-08T09:59:18.168Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-08T04:09:12.632Z",
+          "_id": "6a76abe8bfb87db4d0cdc7da",
+          "punchOut": "2026-08-08T06:13:20.068Z"
+        },
+        {
+          "punchIn": "2026-08-08T06:14:13.838Z",
+          "_id": "6a76c935bfb87db4d0cdd4a8",
+          "punchOut": "2026-08-08T13:04:29.474Z"
+        }
+      ],
+      "totalWorkMs": 32063072,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-08T04:09:12.653Z",
+      "updatedAt": "2026-08-08T13:04:29.493Z",
+      "__v": 1,
+      "lunchInCoordinates": null,
+      "punchOutCoordinates": null,
+      "lunchOutCoordinates": null
+    },
+    {
+      "_id": "6a794ec9bfb87db4d0ce6309",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-10T00:00:00.000Z",
+      "punchIn": "2026-08-10T04:08:41.715Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-10T04:08:41.715Z",
+          "_id": "6a794ec9bfb87db4d0ce630a"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-10T04:08:41.739Z",
+      "updatedAt": "2026-08-10T04:08:41.739Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a794ecebfb87db4d0ce631a",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-10T00:00:00.000Z",
+      "punchIn": "2026-08-10T04:08:46.415Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-10T13:05:10.575Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-10T09:12:24.362Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-10T10:13:02.736Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-10T04:08:46.415Z",
+          "_id": "6a794ecebfb87db4d0ce631b",
+          "punchOut": "2026-08-10T13:05:10.575Z"
+        }
+      ],
+      "totalWorkMs": 32184160,
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-10T04:08:46.436Z",
+      "updatedAt": "2026-08-10T13:05:10.600Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a7aa019bfb87db4d0ce97b2",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-11T00:00:00.000Z",
+      "punchIn": "2026-08-11T04:07:53.922Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-11T04:07:56.853Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-11T13:03:23.421Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-11T04:07:53.922Z",
+          "_id": "6a7aa019bfb87db4d0ce97b3"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-11T04:07:53.942Z",
+      "updatedAt": "2026-08-11T13:03:23.421Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null
+    },
+    {
+      "_id": "6a7aa01fbfb87db4d0ce97d2",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-11T00:00:00.000Z",
+      "punchIn": "2026-08-11T04:07:59.536Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-11T04:07:59.536Z",
+          "_id": "6a7aa01fbfb87db4d0ce97d3"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-11T04:07:59.567Z",
+      "updatedAt": "2026-08-11T04:07:59.567Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a7bf307b69ca9c34c9906c3",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-12T00:00:00.000Z",
+      "punchIn": "2026-08-12T04:13:59.721Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-12T04:13:59.721Z",
+          "_id": "6a7bf307b69ca9c34c9906c4",
+          "punchOut": "2026-08-12T05:43:45.754Z"
+        },
+        {
+          "punchIn": "2026-08-12T10:24:54.733Z",
+          "_id": "6a7c49f6b69ca9c34c9935fb"
+        }
+      ],
+      "totalWorkMs": 5386033,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts",
+      "createdAt": "2026-08-12T04:13:59.742Z",
+      "updatedAt": "2026-08-12T10:24:54.757Z",
+      "__v": 1,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a7bf312b69ca9c34c9906d5",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-12T00:00:00.000Z",
+      "punchIn": "2026-08-12T04:14:10.234Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-12T07:43:33.692Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-12T13:11:29.454Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-12T04:14:10.234Z",
+          "_id": "6a7bf312b69ca9c34c9906d6",
+          "punchOut": "2026-08-12T05:43:43.750Z"
+        },
+        {
+          "punchIn": "2026-08-12T05:43:49.626Z",
+          "_id": "6a7c0815b69ca9c34c99122d"
+        }
+      ],
+      "totalWorkMs": 5373516,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts",
+      "createdAt": "2026-08-12T04:14:10.255Z",
+      "updatedAt": "2026-08-12T13:11:29.456Z",
+      "__v": 1,
+      "punchOutCoordinates": null,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null,
+      "source": "app"
+    },
+    {
+      "_id": "6a7ddb6ad9fa8d41926d2963",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-12T18:30:00.000Z",
+      "punchIn": "2026-08-13T14:57:46.647Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-13T14:57:46.647Z",
+          "_id": "6a7ddb6ad9fa8d41926d2964"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-13T14:57:46.678Z",
+      "updatedAt": "2026-08-13T14:57:46.678Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a7e9235d9fa8d41926d43be",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-13T18:30:00.000Z",
+      "punchIn": "2026-08-14T03:57:41.747Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-14T03:57:41.747Z",
+          "_id": "6a7e9235d9fa8d41926d43bf"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-14T03:57:41.770Z",
+      "updatedAt": "2026-08-14T03:57:41.770Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a7fe5a3d9fa8d41926d7470",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-14T18:30:00.000Z",
+      "punchIn": "2026-08-15T04:05:55.800Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-15T04:05:55.800Z",
+          "_id": "6a7fe5a3d9fa8d41926d7471"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-15T04:05:55.823Z",
+      "updatedAt": "2026-08-15T04:05:55.823Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a8289ecd9fa8d41926da047",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-16T18:30:00.000Z",
+      "punchIn": "2026-08-17T04:11:24.945Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-17T04:11:24.945Z",
+          "_id": "6a8289ecd9fa8d41926da048"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-17T04:11:24.971Z",
+      "updatedAt": "2026-08-17T04:11:24.971Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a83dafdd9fa8d41926deab3",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-17T18:30:00.000Z",
+      "punchIn": "2026-08-18T04:09:33.029Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-18T04:09:33.029Z",
+          "_id": "6a83dafdd9fa8d41926deab4"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-18T04:09:33.056Z",
+      "updatedAt": "2026-08-18T04:09:33.056Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a83db19d9fa8d41926deae7",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-17T18:30:00.000Z",
+      "punchIn": "2026-08-18T04:10:01.489Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-18T04:10:01.489Z",
+          "_id": "6a83db19d9fa8d41926deae8"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-18T04:10:01.530Z",
+      "updatedAt": "2026-08-18T04:10:01.530Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a852ce0d9fa8d41926e0630",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-18T18:30:00.000Z",
+      "punchIn": "2026-08-19T04:11:12.787Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-19T04:11:12.787Z",
+          "_id": "6a852ce0d9fa8d41926e0631"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-19T04:11:12.811Z",
+      "updatedAt": "2026-08-19T04:11:12.811Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a852d14d9fa8d41926e066a",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-18T18:30:00.000Z",
+      "punchIn": "2026-08-19T04:12:04.259Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-19T04:12:04.259Z",
+          "_id": "6a852d14d9fa8d41926e066b"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-19T04:12:04.295Z",
+      "updatedAt": "2026-08-19T04:12:04.295Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a867e86d9fa8d41926e1b3c",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-19T18:30:00.000Z",
+      "punchIn": "2026-08-20T04:11:50.933Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-20T04:11:50.933Z",
+          "_id": "6a867e86d9fa8d41926e1b3d"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-20T04:11:50.956Z",
+      "updatedAt": "2026-08-20T04:11:50.956Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a86f918d9fa8d41926e5c73",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-19T18:30:00.000Z",
+      "punchIn": "2026-08-20T12:54:48.365Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-20T12:54:48.365Z",
+          "_id": "6a86f918d9fa8d41926e5c74"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-20T12:54:48.392Z",
+      "updatedAt": "2026-08-20T12:54:48.392Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a87cff4d9fa8d41926e7f1c",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-20T18:30:00.000Z",
+      "punchIn": "2026-08-21T04:11:32.142Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-21T04:11:32.142Z",
+          "_id": "6a87cff4d9fa8d41926e7f1d"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-21T04:11:32.166Z",
+      "updatedAt": "2026-08-21T04:11:32.166Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a87cff7d9fa8d41926e7f2d",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-20T18:30:00.000Z",
+      "punchIn": "2026-08-21T04:11:35.655Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-21T08:26:46.466Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-21T04:11:35.655Z",
+          "_id": "6a87cff7d9fa8d41926e7f2e",
+          "punchOut": "2026-08-21T08:26:07.646Z"
+        },
+        {
+          "punchIn": "2026-08-21T08:26:13.693Z",
+          "_id": "6a880ba5d9fa8d41926e906b",
+          "punchOut": "2026-08-21T08:26:18.718Z"
+        },
+        {
+          "punchIn": "2026-08-21T08:26:25.094Z",
+          "_id": "6a880bb1d9fa8d41926e90b8",
+          "punchOut": "2026-08-21T08:26:30.281Z"
+        },
+        {
+          "punchIn": "2026-08-21T08:26:41.431Z",
+          "_id": "6a880bc1d9fa8d41926e9108",
+          "punchOut": "2026-08-21T08:26:46.466Z"
+        }
+      ],
+      "totalWorkMs": 15287238,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-21T04:11:35.680Z",
+      "updatedAt": "2026-08-21T08:26:46.496Z",
+      "__v": 3,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a89217ed9fa8d41926ec3cd",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-21T18:30:00.000Z",
+      "punchIn": "2026-08-22T04:11:42.930Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-22T13:37:29.925Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-22T04:11:42.930Z",
+          "_id": "6a89217ed9fa8d41926ec3ce"
+        }
+      ],
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-22T04:11:42.951Z",
+      "updatedAt": "2026-08-22T13:37:29.926Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "punchOutIsProvisional": false
+    },
+    {
+      "_id": "6a8931d3b8c247659385d28a",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-21T18:30:00.000Z",
+      "punchIn": "2026-08-22T05:21:23.439Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-22T13:36:05.409Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-22T13:36:08.125Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-22T05:21:23.439Z",
+          "_id": "6a8931d3b8c247659385d28b"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-22T05:21:23.469Z",
+      "updatedAt": "2026-08-22T13:36:08.126Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null
+    },
+    {
+      "_id": "6a8bc408b8c247659385ff50",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-23T18:30:00.000Z",
+      "punchIn": "2026-08-24T04:09:44.631Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-24T04:09:44.631Z",
+          "_id": "6a8bc408b8c247659385ff51"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-24T04:09:44.656Z",
+      "updatedAt": "2026-08-24T04:09:44.656Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a8bc42bb8c247659385ff78",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-23T18:30:00.000Z",
+      "punchIn": "2026-08-24T04:10:19.703Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-24T04:10:19.703Z",
+          "_id": "6a8bc42bb8c247659385ff79"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-24T04:10:19.727Z",
+      "updatedAt": "2026-08-24T04:10:19.727Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a8d132bb8c2476593865d4c",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-24T18:30:00.000Z",
+      "punchIn": "2026-08-25T03:59:39.222Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-25T13:00:34.223Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-25T07:31:20.674Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-08-25T08:26:05.021Z",
+      "lunchOutLocation": "Location provided by user",
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-25T03:59:39.222Z",
+          "_id": "6a8d132bb8c2476593865d4d",
+          "punchOut": "2026-08-25T04:39:04.758Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:40:57.215Z",
+          "_id": "6a8d1cd9b8c247659386aea7",
+          "punchOut": "2026-08-25T04:41:02.584Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:41:08.404Z",
+          "_id": "6a8d1ce4b8c247659386af9f",
+          "punchOut": "2026-08-25T04:53:55.680Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:54:04.455Z",
+          "_id": "6a8d1fecb8c247659386c212",
+          "punchOut": "2026-08-25T04:54:12.637Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:59:00.290Z",
+          "_id": "6a8d2114b8c247659386c563",
+          "punchOut": "2026-08-25T12:58:34.290Z"
+        },
+        {
+          "punchIn": "2026-08-25T12:58:40.581Z",
+          "_id": "6a8d9180b8c2476593872e7d",
+          "punchOut": "2026-08-25T13:00:34.223Z"
+        }
+      ],
+      "punchOutIsProvisional": true,
+      "totalWorkMs": 32034005,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-25T03:59:39.247Z",
+      "updatedAt": "2026-08-25T13:00:34.255Z",
+      "__v": 5,
+      "punchOutCoordinates": null,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": null
+    },
+    {
+      "_id": "6a8d1334b8c2476593865d5e",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-24T18:30:00.000Z",
+      "punchIn": "2026-08-25T03:59:48.738Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-25T03:59:48.738Z",
+          "_id": "6a8d1334b8c2476593865d5f",
+          "punchOut": "2026-08-25T04:37:25.794Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:37:33.544Z",
+          "_id": "6a8d1c0db8c2476593868002",
+          "punchOut": "2026-08-25T04:38:06.698Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:38:21.112Z",
+          "_id": "6a8d1c3db8c247659386814f",
+          "punchOut": "2026-08-25T04:38:26.173Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:38:31.277Z",
+          "_id": "6a8d1c47b8c24765938681a4",
+          "punchOut": "2026-08-25T04:38:36.306Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:38:42.055Z",
+          "_id": "6a8d1c52b8c24765938681fd",
+          "punchOut": "2026-08-25T04:38:47.997Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:38:53.375Z",
+          "_id": "6a8d1c5db8c247659386869f",
+          "punchOut": "2026-08-25T04:39:01.512Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:39:10.333Z",
+          "_id": "6a8d1c6eb8c2476593868b6e",
+          "punchOut": "2026-08-25T04:39:36.117Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:39:49.350Z",
+          "_id": "6a8d1c95b8c2476593869c77",
+          "punchOut": "2026-08-25T04:40:43.999Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:41:11.994Z",
+          "_id": "6a8d1ce8b8c247659386afbb",
+          "punchOut": "2026-08-25T04:53:29.218Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:53:50.629Z",
+          "_id": "6a8d1fdeb8c247659386c079",
+          "punchOut": "2026-08-25T04:53:56.436Z"
+        },
+        {
+          "punchIn": "2026-08-25T04:58:57.868Z",
+          "_id": "6a8d2111b8c247659386c54e",
+          "punchOut": "2026-08-25T04:59:04.210Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:17:35.493Z",
+          "_id": "6a8d256fb8c247659386d3d7",
+          "punchOut": "2026-08-25T05:22:00.895Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:49:25.757Z",
+          "_id": "6a8d2ce5b8c247659386e4cb",
+          "punchOut": "2026-08-25T05:49:30.667Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:49:35.842Z",
+          "_id": "6a8d2cefb8c247659386e53e",
+          "punchOut": "2026-08-25T05:49:42.053Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:49:47.436Z",
+          "_id": "6a8d2cfbb8c247659386e5b4",
+          "punchOut": "2026-08-25T05:49:53.075Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:49:58.100Z",
+          "_id": "6a8d2d06b8c247659386e62d",
+          "punchOut": "2026-08-25T05:50:03.283Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:50:08.352Z",
+          "_id": "6a8d2d10b8c247659386e6a7",
+          "punchOut": "2026-08-25T05:50:13.563Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:50:18.658Z",
+          "_id": "6a8d2d1ab8c247659386e72c",
+          "punchOut": "2026-08-25T05:50:23.810Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:50:28.915Z",
+          "_id": "6a8d2d24b8c247659386e7ad",
+          "punchOut": "2026-08-25T05:51:03.470Z"
+        },
+        {
+          "punchIn": "2026-08-25T05:51:59.762Z",
+          "_id": "6a8d2d7fb8c247659386ec45"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 3476448,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-25T03:59:48.762Z",
+      "updatedAt": "2026-08-25T05:51:59.788Z",
+      "__v": 19,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a8e65f1b8c2476593874259",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-25T18:30:00.000Z",
+      "punchIn": "2026-08-26T04:05:04.347Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.319213160940183,
+        "lng": 70.76756999879412
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1787717105/attendance/ak2z7fulfddah0zgcxe8.jpg",
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-08-26T07:34:57.270Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": 51,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-26T04:05:04.347Z",
+          "_id": "6a8e65f1b8c247659387425a"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-26T04:05:05.765Z",
+      "updatedAt": "2026-08-26T07:34:57.270Z",
+      "__v": 0,
+      "lunchInCoordinates": null
+    },
+    {
+      "_id": "6a8e6608b8c2476593874480",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-25T18:30:00.000Z",
+      "punchIn": "2026-08-26T04:05:28.255Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-26T04:05:28.255Z",
+          "_id": "6a8e6608b8c2476593874481"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-26T04:05:28.278Z",
+      "updatedAt": "2026-08-26T04:05:28.278Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a8ff353b8c247659387e503",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-26T18:30:00.000Z",
+      "punchIn": "2026-08-27T08:20:35.417Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-08-27T08:21:59.157Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-08-27T08:20:35.417Z",
+          "_id": "6a8ff353b8c247659387e504",
+          "punchOut": "2026-08-27T08:20:37.172Z"
+        },
+        {
+          "punchIn": "2026-08-27T08:20:49.566Z",
+          "_id": "6a8ff361b8c247659387e570",
+          "punchOut": "2026-08-27T08:20:55.239Z"
+        },
+        {
+          "punchIn": "2026-08-27T08:21:07.666Z",
+          "_id": "6a8ff373b8c247659387e5ed",
+          "punchOut": "2026-08-27T08:21:12.691Z"
+        },
+        {
+          "punchIn": "2026-08-27T08:21:18.014Z",
+          "_id": "6a8ff37eb8c247659387e655",
+          "punchOut": "2026-08-27T08:21:23.389Z"
+        },
+        {
+          "punchIn": "2026-08-27T08:21:28.425Z",
+          "_id": "6a8ff388b8c247659387e6c1",
+          "punchOut": "2026-08-27T08:21:33.495Z"
+        },
+        {
+          "punchIn": "2026-08-27T08:21:38.526Z",
+          "_id": "6a8ff392b8c247659387e730",
+          "punchOut": "2026-08-27T08:21:59.157Z"
+        }
+      ],
+      "punchOutIsProvisional": true,
+      "totalWorkMs": 43529,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-27T08:20:35.440Z",
+      "updatedAt": "2026-08-27T08:21:59.179Z",
+      "__v": 5,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a901c88b8c24765938811b5",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-08-26T18:30:00.000Z",
+      "punchIn": "2026-08-27T11:16:22.711Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.31920900846964,
+        "lng": 70.76758145034255
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1787829383/attendance/lpayhg6wp9tztfcnzrhf.jpg",
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": 52,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-27T11:16:22.711Z",
+          "_id": "6a901c88b8c24765938811b6"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-27T11:16:24.100Z",
+      "updatedAt": "2026-08-27T11:16:24.100Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a925fdeb8c2476593887be6",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-28T18:30:00.000Z",
+      "punchIn": "2026-08-29T04:28:13.556Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.3193041,
+        "lng": 70.7672058
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1787977694/attendance/m7jnlr5wpj0w3urv09df.jpg",
+      "punchOut": "2026-08-29T12:53:52.197Z",
+      "punchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchOutPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1788008033/attendance/gadpdklot5ger7molqrr.jpg",
+      "lunchInTime": "2026-08-29T04:28:27.285Z",
+      "lunchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "lunchOutTime": "2026-08-29T11:35:10.576Z",
+      "lunchOutLocation": "Location Capturing Bypassed",
+      "punchInDistance": 31,
+      "punchOutDistance": 25,
+      "lunchInDistance": 31,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-29T04:28:13.556Z",
+          "_id": "6a925fdeb8c2476593887be7",
+          "punchOut": "2026-08-29T12:53:52.197Z"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 30338641,
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-08-29T04:28:14.686Z",
+      "updatedAt": "2026-08-29T12:53:53.579Z",
+      "__v": 0,
+      "lunchInCoordinates": {
+        "lat": 22.3193012,
+        "lng": 70.7672103
+      },
+      "lunchOutCoordinates": null,
+      "punchOutCoordinates": {
+        "lat": 22.3192591,
+        "lng": 70.7671799
+      }
+    },
+    {
+      "_id": "6a9516487fbdaa2294443589",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-30T18:30:00.000Z",
+      "punchIn": "2026-08-31T05:51:02.984Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.319887315038034,
+        "lng": 70.76732697378584
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1788155463/attendance/kb2l4truye4kusas3hga.jpg",
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": 97,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-08-31T05:51:02.984Z",
+          "_id": "6a9516487fbdaa229444358a"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-08-31T05:51:04.247Z",
+      "updatedAt": "2026-08-31T05:51:04.247Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a9662d77fbdaa2294452fd3",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-08-31T18:30:00.000Z",
+      "punchIn": "2026-09-01T05:29:59.648Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-09-01T05:31:08.712Z",
+      "punchOutLocation": "Location provided by user",
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-09-01T05:29:59.648Z",
+          "_id": "6a9662d77fbdaa2294452fd4",
+          "punchOut": "2026-09-01T05:30:11.247Z"
+        },
+        {
+          "punchIn": "2026-09-01T05:31:03.689Z",
+          "_id": "6a9663177fbdaa2294453515",
+          "punchOut": "2026-09-01T05:31:08.712Z"
+        }
+      ],
+      "punchOutIsProvisional": true,
+      "totalWorkMs": 16622,
+      "remarks": " | Early punch-out for shift (before 18:15) | Multiple shifts | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-09-01T05:29:59.685Z",
+      "updatedAt": "2026-09-01T05:31:08.741Z",
+      "__v": 1,
+      "punchOutCoordinates": null
+    },
+    {
+      "_id": "6a9e70f97fbdaa2294467e93",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-09-06T18:30:00.000Z",
+      "punchIn": "2026-09-07T08:08:23.796Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.3191084,
+        "lng": 70.7670858
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1788768504/attendance/vzcwjsjfy7gyzw8kgmov.jpg",
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": 8,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-09-07T08:08:23.796Z",
+          "_id": "6a9e70f97fbdaa2294467e94"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-09-07T08:08:25.142Z",
+      "updatedAt": "2026-09-07T08:08:25.142Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a9ffe1b7fbdaa229447665a",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-09-07T18:30:00.000Z",
+      "punchIn": "2026-09-08T12:22:50.032Z",
+      "punchInLocation": "Location Capturing Bypassed",
+      "punchInCoordinates": {
+        "lat": 22.3191938,
+        "lng": 70.7671581
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1788870170/attendance/pwp56yptqulcbplyj5dn.jpg",
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": 18,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-09-08T12:22:50.032Z",
+          "_id": "6a9ffe1b7fbdaa229447665b"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-09-08T12:22:51.911Z",
+      "updatedAt": "2026-09-08T12:22:51.911Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa1598d7fbdaa229447e42a",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-09-08T18:30:00.000Z",
+      "punchIn": "2026-09-09T13:05:16.291Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.3191813,
+        "lng": 70.7671472
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1788959117/attendance/kzs3wxbnposznlshice8.jpg",
+      "punchOut": "2026-09-09T13:05:48.414Z",
+      "punchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchOutPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1788959149/attendance/yakljzrgntgyebrzrlch.jpg",
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": 16,
+      "punchOutDistance": 25,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-09-09T13:05:16.291Z",
+          "_id": "6aa1598d7fbdaa229447e42b",
+          "punchOut": "2026-09-09T13:05:48.414Z"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 32123,
+      "remarks": " | Late punch-in for shift (after 09:10); Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-09-09T13:05:17.926Z",
+      "updatedAt": "2026-09-09T13:05:49.787Z",
+      "__v": 0,
+      "punchOutCoordinates": {
+        "lat": 22.3192586,
+        "lng": 70.7671798
+      }
+    },
+    {
+      "_id": "6aa2424e7fbdaa2294482ee2",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-09-09T18:30:00.000Z",
+      "punchIn": "2026-09-10T05:38:22.650Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-09-10T10:30:24.777Z",
+      "punchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchOutPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1789036225/attendance/xrejc13kjmmnubpme8iu.jpg",
+      "lunchInTime": "2026-09-10T07:30:32.352Z",
+      "lunchInLocation": "Location provided by user",
+      "lunchOutTime": "2026-09-10T10:30:19.048Z",
+      "lunchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInDistance": null,
+      "punchOutDistance": 52,
+      "lunchInDistance": null,
+      "lunchOutDistance": 52,
+      "status": "half-day",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-09-10T05:38:22.650Z",
+          "_id": "6aa2424e7fbdaa2294482ee3",
+          "punchOut": "2026-09-10T10:30:24.777Z"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 17522127,
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-09-10T05:38:22.676Z",
+      "updatedAt": "2026-09-10T10:30:26.432Z",
+      "__v": 0,
+      "lunchInCoordinates": null,
+      "lunchOutCoordinates": {
+        "lat": 22.319273814437032,
+        "lng": 70.76755136590565
+      },
+      "punchOutCoordinates": {
+        "lat": 22.319273814411762,
+        "lng": 70.76755136582614
+      }
+    },
+    {
+      "_id": "6aa25c767fbdaa229448369f",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-09-09T18:30:00.000Z",
+      "punchIn": "2026-09-10T07:29:58.920Z",
+      "punchInLocation": "Location provided by user",
+      "punchInCoordinates": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "lens",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-09-10T07:29:58.920Z",
+          "_id": "6aa25c767fbdaa22944836a0"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "remarks": "",
+      "createdAt": "2026-09-10T07:29:58.941Z",
+      "updatedAt": "2026-09-10T07:29:58.941Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa39cbc2eaf568616a65909",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-09-10T18:30:00.000Z",
+      "punchIn": "2026-09-11T06:16:27.103Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.3190921,
+        "lng": 70.7670728
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1789107387/attendance/qg3lnh09hlh6zkagmdo9.jpg",
+      "punchOut": "2026-09-11T06:17:56.976Z",
+      "punchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchOutPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1789107478/attendance/vdvalx817zrqkd4xp0we.jpg",
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": 7,
+      "punchOutDistance": 6,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-09-11T06:16:27.103Z",
+          "punchOut": "2026-09-11T06:17:56.976Z",
+          "closeReason": null,
+          "_id": "6aa3babe5843243cc6d79fe9"
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 89873,
+      "derivedFields": [],
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-09-11T06:16:28.164Z",
+      "updatedAt": "2026-09-11T08:24:30.541Z",
+      "__v": 1,
+      "punchOutCoordinates": {
+        "lat": 22.3190811,
+        "lng": 70.7670675
+      }
+    },
+    {
+      "_id": "6aa3ecb65843243cc6d7b5d1",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-09-10T18:30:00.000Z",
+      "punchIn": "2026-09-11T06:27:39.000Z",
+      "punchInLocation": null,
+      "punchInPhoto": null,
+      "punchOut": null,
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": null,
+      "lunchInLocation": null,
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": null,
+      "lunchOutDistance": null,
+      "status": "present",
+      "source": "biometric",
+      "isWFH": false,
+      "wasLate": false,
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "punchInAccuracy": null,
+      "punchOutAccuracy": null,
+      "punchInFixAt": null,
+      "punchOutFixAt": null,
+      "derivedFields": [
+        "punchIn"
+      ],
+      "remarks": null,
+      "shifts": [
+        {
+          "punchIn": "2026-09-11T06:27:39.000Z",
+          "punchOut": null,
+          "closeReason": null,
+          "_id": "6aa3ecb65843243cc6d7b5d2"
+        }
+      ],
+      "createdAt": "2026-09-11T11:57:42.107Z",
+      "updatedAt": "2026-09-11T11:57:42.107Z",
+      "__v": 0
+    },
+    {
+      "_id": "6aa4d24d5843243cc6d7f4e1",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a6996d3835fb1fb12e33587",
+      "date": "2026-09-11T18:30:00.000Z",
+      "punchIn": "2026-09-12T04:17:15.947Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.319267038073377,
+        "lng": 70.7675539416694
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1789186636/attendance/wwlzdixkgpfeiebnzyuq.jpg",
+      "punchOut": "2026-09-12T06:44:54.000Z",
+      "punchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchOutPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1789214136/attendance/d3fpfgshgcuk7rp97kfe.jpg",
+      "lunchInTime": "2026-09-12T04:20:05.321Z",
+      "lunchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "lunchOutTime": "2026-09-12T04:20:10.885Z",
+      "lunchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInDistance": 52,
+      "punchOutDistance": 6,
+      "lunchInDistance": 52,
+      "lunchOutDistance": 52,
+      "status": "half-day",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": true,
+      "shifts": [
+        {
+          "punchIn": "2026-09-12T04:17:15.947Z",
+          "punchOut": "2026-09-12T06:44:54.000Z",
+          "closeReason": "device",
+          "punchInSource": "app",
+          "punchOutSource": "biometric",
+          "punchInLocation": null,
+          "punchOutLocation": null,
+          "punchInAccuracy": null,
+          "punchOutAccuracy": null,
+          "punchInDistance": null,
+          "punchOutDistance": null,
+          "workMs": 0,
+          "_id": "6aa538435843243cc6d89fce"
+        }
+      ],
+      "punchOutIsProvisional": true,
+      "totalWorkMs": 0,
+      "punchInAccuracy": 14.052158899903151,
+      "punchOutAccuracy": 30.602,
+      "punchInFixAt": "2026-09-12T04:17:15.864Z",
+      "punchOutFixAt": "2026-09-12T11:55:34.545Z",
+      "derivedFields": [
+        "punchOut"
+      ],
+      "remarks": " | Early punch-out for shift (before 18:15) | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-09-12T04:17:17.371Z",
+      "updatedAt": "2026-09-12T12:14:56.363Z",
+      "__v": 5,
+      "lunchInCoordinates": {
+        "lat": 22.319267038073377,
+        "lng": 70.7675539416694
+      },
+      "lunchOutCoordinates": {
+        "lat": 22.319267038073377,
+        "lng": 70.7675539416694
+      },
+      "autoPunchOut": false,
+      "punchOutCoordinates": {
+        "lat": 22.3190721,
+        "lng": 70.7670652
+      }
+    },
+    {
+      "_id": "6aa4d3db5843243cc6d810e0",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6a699714835fb1fb12e335d9",
+      "date": "2026-09-11T18:30:00.000Z",
+      "punchIn": "2026-09-12T04:23:53.874Z",
+      "punchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInCoordinates": {
+        "lat": 22.3191969,
+        "lng": 70.7671713
+      },
+      "punchInPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1789187034/attendance/lceqsyrxvnoefqyd7wpi.jpg",
+      "punchOut": "2026-09-12T11:56:25.863Z",
+      "punchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchOutPhoto": "https://res.cloudinary.com/dg41yycrr/image/upload/v1789214186/attendance/qow0ot4cwmi6tqqwn73l.jpg",
+      "lunchInTime": "2026-09-12T11:56:17.101Z",
+      "lunchInLocation": "Location Capturing Bypassed",
+      "lunchOutTime": "2026-09-12T11:56:18.969Z",
+      "lunchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "punchInDistance": 18,
+      "punchOutDistance": 5,
+      "lunchInDistance": 5,
+      "lunchOutDistance": 5,
+      "status": "half-day",
+      "source": "app",
+      "isWFH": false,
+      "wasLate": false,
+      "shifts": [
+        {
+          "punchIn": "2026-09-12T04:23:53.874Z",
+          "closeReason": "manual",
+          "_id": "6aa4d3db5843243cc6d810e1",
+          "punchOut": "2026-09-12T11:56:25.863Z",
+          "punchOutAccuracy": 30.882,
+          "punchOutCoordinates": {
+            "lat": 22.3190617,
+            "lng": 70.7670719
+          },
+          "punchOutDistance": 5,
+          "punchOutLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+          "punchOutSource": "app",
+          "workMs": 0
+        }
+      ],
+      "punchOutIsProvisional": false,
+      "totalWorkMs": 0,
+      "punchInAccuracy": 15.96500015258789,
+      "punchOutAccuracy": 30.882,
+      "punchInFixAt": "2026-09-12T04:23:54.518Z",
+      "punchOutFixAt": "2026-09-12T11:56:24.869Z",
+      "derivedFields": [],
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "createdAt": "2026-09-12T04:23:55.064Z",
+      "updatedAt": "2026-09-12T11:56:27.389Z",
+      "__v": 0,
+      "autoPunchOut": false,
+      "lunchInCoordinates": {
+        "lat": 22.3190598,
+        "lng": 70.7670692
+      },
+      "lunchOutCoordinates": {
+        "lat": 22.3190598,
+        "lng": 70.7670692
+      },
+      "punchOutCoordinates": {
+        "lat": 22.3190617,
+        "lng": 70.7670719
+      }
+    },
+    {
+      "_id": "6aa54b922ea2f62fa4de1e1d",
+      "adminId": "6a6990c0835fb1fb12e33268",
+      "employeeId": "6aa54a7a2ea2f62fa4de191c",
+      "date": "2026-09-11T18:30:00.000Z",
+      "punchIn": "2026-09-12T07:24:40.000Z",
+      "punchInLocation": null,
+      "punchInPhoto": null,
+      "punchOut": "2026-09-12T13:13:34.000Z",
+      "punchOutLocation": null,
+      "punchOutPhoto": null,
+      "lunchInTime": "2026-09-12T13:09:37.589Z",
+      "lunchInLocation": "Rajkot, Rajkot East Taluka, Rajkot, Gujarat, 360001, India",
+      "lunchOutTime": null,
+      "lunchOutLocation": null,
+      "punchInDistance": null,
+      "punchOutDistance": null,
+      "lunchInDistance": 15,
+      "lunchOutDistance": null,
+      "status": "half-day",
+      "source": "biometric",
+      "isWFH": false,
+      "wasLate": false,
+      "punchOutIsProvisional": true,
+      "totalWorkMs": 0,
+      "punchInAccuracy": null,
+      "punchOutAccuracy": null,
+      "punchInFixAt": null,
+      "punchOutFixAt": null,
+      "derivedFields": [
+        "punchIn",
+        "punchOut"
+      ],
+      "autoPunchOut": false,
+      "autoPunchOutReason": null,
+      "calculatedDistance": null,
+      "geoStatus": null,
+      "remarks": " | Early punch-out for shift (before 18:15)",
+      "shifts": [
+        {
+          "punchIn": "2026-09-12T07:24:40.000Z",
+          "punchOut": "2026-09-12T13:13:34.000Z",
+          "closeReason": "device",
+          "punchInSource": "biometric",
+          "punchOutSource": "biometric",
+          "punchInLocation": null,
+          "punchOutLocation": null,
+          "punchInAccuracy": null,
+          "punchOutAccuracy": null,
+          "punchInDistance": null,
+          "punchOutDistance": null,
+          "workMs": 0,
+          "_id": "6aa54b922ea2f62fa4de1e1e"
+        }
+      ],
+      "createdAt": "2026-09-12T12:54:42.402Z",
+      "updatedAt": "2026-09-12T13:13:35.935Z",
+      "__v": 2,
+      "lunchInCoordinates": {
+        "lat": 22.3191723,
+        "lng": 70.7671651
+      },
+      "punchOutCoordinates": null
+    }
+  ]
+}

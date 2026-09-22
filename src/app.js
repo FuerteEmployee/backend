@@ -10,6 +10,14 @@ app.use(express.json());
 // Enable CORS
 const allowedOrigins = [
     "https://botcrm.beontimeofficial.com",
+    // Staging web + its own API. These lived ONLY on the staging server for a
+    // while, added by hand and never committed, so the first source deploy that
+    // overwrote app.js silently removed them and every login from
+    // staging.beontimeofficial.com failed CORS preflight. Keeping them here is
+    // what stops that happening again -- an origin the product genuinely uses
+    // belongs in the repo, not in one machine's working copy.
+    "https://staging.beontimeofficial.com",
+    "https://staging-api.beontimeofficial.com",
     "https://gray-crab-756474.hostingersite.com",
     "http://localhost:5173",
     "http://localhost:5174",
@@ -84,6 +92,25 @@ app.use(
         maxAge: "1y",
         immutable: true,
         fallthrough: false,
+    }),
+);
+
+// Signed APKs, on the same terms as bundles and for the same reasons: public,
+// immutable (the filename carries the versionCode), and reachable without a
+// session because the system browser — not the app — performs the download,
+// and it carries none of the app's headers.
+app.use(
+    "/apks",
+    express.static(require("path").join(__dirname, "..", "apks"), {
+        maxAge: "1y",
+        immutable: true,
+        fallthrough: false,
+        setHeaders: (res) => {
+            // Android's download manager decides what to do with a file from
+            // its Content-Type. Served as the default octet-stream some devices
+            // save it as a text file, which then cannot be installed.
+            res.setHeader("Content-Type", "application/vnd.android.package-archive");
+        },
     }),
 );
 

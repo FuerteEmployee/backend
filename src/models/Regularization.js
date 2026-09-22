@@ -25,6 +25,12 @@ const RegularizationSchema = new mongoose.Schema({
     },
 
     reason: { type: String, required: true },
+    // What the punch-out said BEFORE this request was approved -- almost always
+    // the shift-end time the nightly close job wrote because nobody punched
+    // out. Captured as a real timestamp rather than left to the free-text
+    // remark, so "what did we overwrite, and by how much" stays answerable
+    // after the fact. Null on a request that never touched the punch-out.
+    originalPunchOut: { type: Date, default: null },
     status: {
         type: String,
         enum: ['pending', 'approved', 'rejected'],

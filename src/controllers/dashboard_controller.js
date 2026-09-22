@@ -155,6 +155,7 @@ exports.getSummary = async (req, res) => {
             presentCount,
             lateCount,
             halfDayCount,
+            needsReviewCount,
             absentExplicitCount,
             monthlySalaryRecords,
             monthlyExpenses,
@@ -167,6 +168,7 @@ exports.getSummary = async (req, res) => {
             Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: { $in: ['present', 'wfh'] } }),
             Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'late' }),
             Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'half-day' }),
+            Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'needs_review' }),
             Attendance.countDocuments({ adminId, date: { $gte: dayWindowStart, $lte: dayWindowEnd }, status: 'absent' }),
             Salary.find({ adminId, $or: salaryMonthYearPairs }),
             Expense.find({ adminId, date: { $gte: monthStart, $lte: monthEnd } }),
@@ -201,10 +203,18 @@ exports.getSummary = async (req, res) => {
                 // (extrapolating a full-month absence count would need the
                 // same working-day/holiday logic payroll uses — out of scope
                 // for a dashboard card).
+                // `needs_review` is subtracted here alongside the graded
+                // buckets. It is NOT absence -- it is a day carrying a real
+                // punch that could not be measured -- but it was in no bucket
+                // at all, so every one of those employees was silently counted
+                // as having not turned up. The Attendance page derives absence
+                // from row COUNT and so never included them, which is how the
+                // same day read 11 absent here and 10 there.
                 absentToday: isCurrentMonth
-                    ? Math.max(0, activeEmployees - (presentCount + lateCount + halfDayCount))
+                    ? Math.max(0, activeEmployees - (presentCount + lateCount + halfDayCount + needsReviewCount))
                     : absentExplicitCount,
                 halfDayToday: halfDayCount,
+                needsReviewToday: needsReviewCount,
                 totalSalary,
                 totalExpenses: totalExpenseAmount,
                 totalLeads

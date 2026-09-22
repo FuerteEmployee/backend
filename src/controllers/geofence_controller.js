@@ -4,7 +4,7 @@ const GeofenceAudit = require('../models/GeofenceAudit');
 const Settings = require('../models/Settings');
 const User = require('../models/User');
 const { istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
-const { computeWorkedMs, computeSessionWorkMs, gradeDay } = require('../utils/shift_status');
+const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, syncRootPunchOut } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,7 +252,8 @@ exports.revertAutoPunchOut = async (req, res) => {
                 session.closeReason = 'admin';
                 session.punchOutSource = 'admin';
             }
-            if (idx <= 0) attendance.punchOut = when;
+            if (!sessions.length) attendance.punchOut = when;
+            else syncRootPunchOut(attendance);
         } else {
             // Reopen: the engine was wrong, the employee never left.
             if (session) {
@@ -264,12 +265,15 @@ exports.revertAutoPunchOut = async (req, res) => {
                 session.punchOutLocation = null;
                 session.workMs = null;
             }
-            if (idx <= 0) {
-                attendance.punchOut = null;
-                attendance.punchOutCoordinates = null;
-                attendance.punchOutLocation = null;
-                attendance.punchOutDistance = null;
-            }
+            // Clear the root first, then re-derive. Reopening the session that
+            // the root was mirroring must not leave a stale punch-out behind,
+            // and syncRootPunchOut deliberately declines to touch a day that is
+            // open -- so it cannot do the clearing itself.
+            attendance.punchOut = null;
+            attendance.punchOutCoordinates = null;
+            attendance.punchOutLocation = null;
+            attendance.punchOutDistance = null;
+            if (sessions.length) syncRootPunchOut(attendance);
         }
 
         // Clear the geofence verdict either way -- the day is no longer one the
@@ -287,7 +291,10 @@ exports.revertAutoPunchOut = async (req, res) => {
         attendance.remarks = (attendance.remarks || '') + note;
 
         attendance.totalWorkMs = computeWorkedMs(attendance, user?.shiftId, settings);
-        for (const s of sessions) s.workMs = computeSessionWorkMs(s, attendance, user?.shiftId);
+        for (const s of sessions) {
+            s.workMs = computeSessionWorkMs(s, attendance, user?.shiftId);
+            s.grossMs = computeSessionGrossMs(s);
+        }
 
         // gradeDay returns null while the day is open, which is exactly right
         // for a reopen: an in-progress day has no status to store.

@@ -15,6 +15,21 @@ const SalarySchema = new mongoose.Schema({
         enum: ['paid', 'pending', 'final', 'review'],
         default: 'pending'
     },
+
+    // ── Payment, recorded as fact rather than inferred from `status` ─────────
+    //
+    // `status` is RECOMPUTED from scratch on every payroll run
+    // (calculateAndSaveSalary derives it from "is this the current month?"), so
+    // for as long as it was the only record of a payment, a regenerate silently
+    // rewrote 'paid' to 'pending' and there was afterwards no way to tell that
+    // anyone had ever been paid -- not flagged, not archived, not derivable.
+    //
+    // These two fields are what make that recoverable: they are written once,
+    // when a human marks the row paid, and the generator is required to carry
+    // them across untouched. A row with a `paidAt` has been paid, whatever
+    // `status` currently says.
+    paidAt: { type: Date, default: null },
+    paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     breakdown: {
         earnings: [{ name: String, amount: Number }],
         deductions: [{ name: String, amount: Number }]

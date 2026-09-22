@@ -14,12 +14,22 @@
 
 const { isWeeklyOff, toLocalDateKey, istDateKey } = require('./attendance_helpers');
 
-const BUCKETS = ['present', 'wfh', 'halfDay', 'paidLeave', 'weeklyOff', 'holiday', 'absent', 'unpaidLeave'];
+// 'needsReview' is a ninth bucket, added so an unmeasurable day still lands in
+// exactly one bucket and the day-sum invariant continues to hold. It carries no
+// pay weight: a day nobody has adjudicated must not quietly earn money, and must
+// not quietly cost it either. validateSalary refuses to pass a run containing
+// any, so the figure never reaches a payslip unreviewed.
+const BUCKETS = ['present', 'wfh', 'halfDay', 'paidLeave', 'weeklyOff', 'holiday', 'absent', 'unpaidLeave', 'needsReview'];
 
 // Defaults that reproduce TODAY's pay weighting for buckets that exist today.
 const LEGACY_DEFAULT_WEIGHTS = {
     present: 1, wfh: 1, halfDay: 0.5, paidLeave: 1,
     weeklyOff: 1, holiday: 1, absent: 0, unpaidLeave: 0,
+    // Zero PENDING ADJUDICATION, not zero as a verdict. validateSalary refuses
+    // any run containing these, so the figure is never finalised while the
+    // weight still applies. Stated explicitly rather than relying on the
+    // lookup defaulting to 0, so the intent survives the next reader.
+    needsReview: 0,
 };
 
 // Parse a 'YYYY-MM-DD' string (or Date) as a LOCAL date (no UTC shift).
@@ -94,6 +104,18 @@ function workedBucketFromAttendance(rec) {
         return isWfh ? 'wfh' : 'present';
     }
     if (rec.status === 'half-day') return 'halfDay';
+
+    // 'needs_review' is NOT absence. It means the day carries a real punch but
+    // could not be measured -- a missing punch-out, an unresolvable shift.
+    //
+    // Falling through to null here buckets it as `absent`, which pays zero. That
+    // is precisely the harm the status was introduced to prevent: it would turn
+    // "we could not work out what this person did" into "this person did not
+    // come to work", silently, at full cost to them. The day is instead counted
+    // as unmeasured and the whole run is flagged so a human resolves it before
+    // anyone is paid from it.
+    if (rec.status === 'needs_review') return 'needsReview';
+
     return null; // explicit 'absent' or no meaningful work
 }
 
@@ -261,6 +283,11 @@ function validateSalary({ counts, windowStart = 1, windowEnd, baseSalary, netSal
     if (sum !== expectedWindowDays) errors.push(`Day-sum invariant failed: ${sum} classified vs ${expectedWindowDays} days in window`);
     if (!(baseSalary > 0)) errors.push('Base salary missing or non-positive');
     if (netSalary < 0) errors.push('Net salary is negative');
+    // A day the system could not grade must be resolved by a person before this
+    // salary is trusted. Paying around it in either direction is a guess.
+    if (counts.needsReview > 0) {
+        errors.push(`${counts.needsReview} day(s) need review before this salary can be finalised`);
+    }
     return { ok: errors.length === 0, errors };
 }
 

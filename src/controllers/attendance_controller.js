@@ -9,9 +9,9 @@ const Regularization = require('../models/Regularization');
 const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance, PUNCH_MAX_ACCURACY_M } = require('../utils/distance');
-const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs, computeSessionWorkMs } = require('../utils/shift_status');
+const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs, computeSessionWorkMs, isAfterShiftEnd } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
-const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, applyPunchRounding } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istTimeOnDate, applyPunchRounding } = require('../utils/attendance_helpers');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -34,8 +34,55 @@ async function uploadToCloudinary(dataUrl, folder = 'attendance') {
         });
         return result.secure_url;
     } catch (error) {
+        // THROWS. This used to `return null`, which meant a Cloudinary outage
+        // produced a punch that was written, reported as successful, and had no
+        // photo -- indistinguishable afterwards from a punch where nobody was
+        // asked for one. The caller is the only place that knows whether a
+        // missing photo is acceptable, so the decision belongs there.
         console.error("Cloudinary Upload Error:", error);
-        return null;
+        throw error;
+    }
+}
+
+/**
+ * The photo that goes on a punch, or a refusal.
+ *
+ * A punch selfie is the only evidence that the person who punched is the person
+ * whose name is on the record -- GPS proves a phone was at the office, not who
+ * was holding it. It was optional: `photo ? await upload(photo) : null` meant
+ * omitting the field entirely produced a fully accepted punch, so the check
+ * could be skipped by anyone posting to the API directly.
+ *
+ * DEVICE PUNCHES ARE EXEMPT, and that exemption is load-bearing. eSSL/ZKTeco
+ * terminals reach punchIn()/punchOut() through callHandler() in
+ * iclock_controller with a synthetic `{ isDevicePunch: true, body: {} }` request
+ * -- they have no camera and can never send a photo. Requiring one without this
+ * gate would reject every hardware punch in production. Their identity evidence
+ * is the fingerprint at the terminal plus the serial→tenant→PIN→employee
+ * resolution, not a selfie.
+ */
+async function resolvePunchPhoto(req, photo, action) {
+    if (req.isDevicePunch) return { ok: true, url: null };
+
+    if (!photo) {
+        return {
+            ok: false,
+            status: 400,
+            message: `A photo is required to ${action}. Please allow camera access and try again.`,
+        };
+    }
+
+    try {
+        return { ok: true, url: await uploadToCloudinary(photo) };
+    } catch (err) {
+        // Fail the punch rather than record it without the photo it is supposed
+        // to carry. The employee can retry; a silently photo-less punch cannot
+        // be told apart later from one that was never checked.
+        return {
+            ok: false,
+            status: 503,
+            message: 'Your photo could not be uploaded, so the punch was not recorded. Please check your connection and try again.',
+        };
     }
 }
 
@@ -114,6 +161,21 @@ function sessionEndFields(end, { req, address, location, accuracy, distance }) {
 }
 
 /**
+ * Human-readable distance for an error message a real person has to read on a
+ * phone screen. A raw meter count reads fine at "450m" but stops being
+ * legible the moment it is wrong by an order of magnitude or more -- an
+ * employee mis-assigned to a branch 900+ km away saw "(Distance: 925548m)",
+ * six digits with no unit break, which does not register as "impossibly far
+ * away" the way "925.5 km" does at a glance. Switches to km at 1000m, one
+ * decimal place.
+ */
+function formatDistance(metres) {
+    if (!Number.isFinite(metres)) return 'an unknown distance';
+    if (metres >= 1000) return `${(metres / 1000).toFixed(1)} km`;
+    return `${Math.round(metres)}m`;
+}
+
+/**
  * Distance to the nearest fenced branch, and whether this punch must be refused.
  *
  * ONE implementation for every session of the day. The second punch-in used to
@@ -125,7 +187,18 @@ function sessionEndFields(end, { req, address, location, accuracy, distance }) {
  * `requireLocation` governs only the refusal.
  */
 function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch }) {
-    const branches = [user?.branchId, ...(user?.branchIds || [])].filter((b) => b && b.geoFenceEnabled !== false);
+    // Two different lists, because "has no branch" and "has a branch that is
+    // not fenced" are opposite situations that this function used to conflate.
+    //
+    // Collapsing them inverted the per-branch toggle: switching geoFenceEnabled
+    // OFF removed the branch from the array, the empty array then read as "no
+    // branch assigned", and every employee on that branch was REFUSED the punch
+    // with "No branch assigned. Cannot verify location." Turning a fence off is
+    // an exemption -- it must let people punch from anywhere, not lock them out
+    // of punching at all, and certainly not with a message denying they have a
+    // branch they plainly do have.
+    const assigned = [user?.branchId, ...(user?.branchIds || [])].filter(Boolean);
+    const branches = assigned.filter((b) => b.geoFenceEnabled !== false);
     const fallback = settings?.attendance?.officeRadius || 3000;
 
     if (!isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
@@ -135,14 +208,23 @@ function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunc
         if (rules.requireLocation && Number.isFinite(distance) && distance > maxRadius) {
             return {
                 distance: rounded,
-                reject: { message: `You Are Not At Office Location (Distance: ${rounded}m)`, distance: rounded },
+                reject: {
+                    message: `You Are Not At Office Location (Distance: ${formatDistance(distance)})`,
+                    distance: rounded,
+                },
             };
         }
         return { distance: rounded, reject: null };
     }
 
     if (!isWFH && !isDevicePunch && rules.requireLocation && branches.length === 0) {
-        return { distance: null, reject: { message: 'No branch assigned. Cannot verify location.' } };
+        // Refuse ONLY when there is genuinely nothing to measure against. If a
+        // branch is assigned and its fence is simply switched off, that is a
+        // deliberate exemption and the punch is allowed through unmeasured.
+        if (assigned.length === 0) {
+            return { distance: null, reject: { message: 'No branch assigned. Cannot verify location.' } };
+        }
+        return { distance: null, reject: null };
     }
 
     return { distance: null, reject: null };
@@ -160,6 +242,12 @@ function getAttendanceRules(user, settings) {
         remotePunch: settings?.attendance?.remotePunch || false
     };
 }
+
+// Exported so the profile endpoint can tell the app whether to OFFER the
+// Work From Home toggle, using the same precedence that decides whether the
+// punch is accepted. A client with its own copy of this rule would show a
+// control that 403s, which is worse than not showing it at all.
+exports.getAttendanceRules = getAttendanceRules;
 
 /**
  * Calculates current month stats for the employee to return in punch-in response
@@ -189,8 +277,16 @@ exports.punchIn = async (req, res) => {
         const employeeId = req.userId; // Use userId from protect middleware
         const { location, photo, isWFH, address, accuracy, fixAt } = req.body;
 
-        const accuracyError = rejectPoorAccuracy(accuracy);
-        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
+        // The accuracy gate exists to stop a cell-tower guess deciding whether
+        // somebody is standing at the office door. A Work From Home punch is
+        // not measured against any fence, so there is nothing for a poor fix to
+        // corrupt -- and refusing one would block the employee this mode exists
+        // to serve, who is indoors on wifi with no clear sky, over a number
+        // nobody is going to read. Position is still recorded, just not judged.
+        if (!isWFH) {
+            const accuracyError = rejectPoorAccuracy(accuracy);
+            if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
+        }
         const now = new Date();
         const today = istStartOfDay(now);
 
@@ -209,6 +305,32 @@ exports.punchIn = async (req, res) => {
         // 'Punch In' is in roundingAppliedTo) — feeds status/half-day checks and
         // is what actually gets stored, so payroll and the late check agree.
         const punchInTime = applyPunchRounding(now, 'Punch In', settings);
+
+        // No NEW session once the shift is over.
+        //
+        // Applies to the first punch of the day and to every re-punch, so it
+        // sits above both branches below. Punch-OUT is deliberately never
+        // guarded: somebody still on the clock at shift end has to be able to
+        // close their own day.
+        //
+        // Observed 2026-09-18: an employee punched in at 18:44 against a
+        // 09:30-18:30 shift. There was no shift left to work, so the 04:00 job
+        // closed the session at the punch-in instant itself -- a zero-length
+        // day, graded `needs_review`, which pays nothing and has to be sorted
+        // out by an admin. Refusing the punch at the door says so immediately,
+        // while the employee is still holding the phone and can ask.
+        //
+        // Off by default for a tenant that sets `blockPunchInAfterShiftEnd:
+        // false` -- a 24/7 operation, or one whose shifts are nominal.
+        const blockAfterEnd = settings?.attendance?.blockPunchInAfterShiftEnd !== false;
+        const afterEndGraceMs = Math.max(0, Number(settings?.attendance?.punchInGraceAfterShiftEndMins) || 0) * 60 * 1000;
+        if (blockAfterEnd && user?.shiftId && isAfterShiftEnd(user.shiftId, punchInTime, afterEndGraceMs)) {
+            return res.status(400).json({
+                message: `Your ${user.shiftId.name ? `${user.shiftId.name} shift` : 'shift'} ended at ${user.shiftId.endTime}. `
+                    + `Punch-in is closed for today. If you worked, ask your admin to add it through Attendance Regularization.`,
+                shiftEnded: true,
+            });
+        }
 
         // Camera-detected punches (BOTLens) reflect physical reality — the
         // person genuinely left and came back — so they always get to
@@ -237,7 +359,8 @@ exports.punchIn = async (req, res) => {
             const sessionCount = allSessions(attendance).length;
             if (sessionCount >= MAX_SESSIONS) {
                 return res.status(400).json({
-                    message: `Maximum daily session limit (${MAX_SESSIONS}) reached. Please contact your admin if you need another session today.`,
+                    message: `You have already had ${MAX_SESSIONS} separate work sessions today, which is the daily limit. `
+                        + `Ask your admin to add the extra time through Attendance Regularization \u2014 your work still counts.`,
                 });
             }
 
@@ -246,7 +369,9 @@ exports.punchIn = async (req, res) => {
             if (reGeo.reject) return res.status(400).json(reGeo.reject);
 
             // Perform multiple punch in
-            const photoUrl = photo ? await uploadToCloudinary(photo) : null;
+            const rePhoto = await resolvePunchPhoto(req, photo, 'punch in');
+            if (!rePhoto.ok) return res.status(rePhoto.status).json({ message: rePhoto.message });
+            const photoUrl = rePhoto.url;
             attendance.punchOut = null;
             attendance.punchOutLocation = null;
             attendance.punchOutCoordinates = null;
@@ -305,17 +430,36 @@ exports.punchIn = async (req, res) => {
                 status = 'late';
             }
             if (user.shiftId.halfDayLatePunchInMin) {
-                const [sHour, sMinute] = user.shiftId.startTime.split(':').map(Number);
-                const halfDayPunchInCutoff = new Date(punchInTime);
-                halfDayPunchInCutoff.setHours(sHour, sMinute + user.shiftId.halfDayLatePunchInMin, 0, 0);
-                if (punchInTime > halfDayPunchInCutoff) {
+                // istTimeOnDate, NOT setHours.
+                //
+                // setHours resolves in the HOST timezone and production runs on
+                // a UTC box, so a 09:30 shift produced a cutoff at 09:30 UTC =
+                // 15:00 IST — five and a half hours late. The rule therefore
+                // never fired on the live punch path: 87 of 303 rows on tenants
+                // that configured it should have been half-day and were stored
+                // as `present`, including an 14:13 arrival against a 09:35
+                // cutoff.
+                //
+                // The same defect was already fixed in attendance_helpers.js,
+                // shift_status.js, attendance_close.js and
+                // regularization_controller.js — whose comment calls itself
+                // "the fifth copy". This is the sixth, and it is the one every
+                // app and biometric punch actually goes through.
+                const halfDayPunchInCutoff = istTimeOnDate(
+                    user.shiftId.startTime,
+                    punchInTime,
+                    user.shiftId.halfDayLatePunchInMin,
+                );
+                if (halfDayPunchInCutoff && punchInTime > halfDayPunchInCutoff) {
                     status = 'half-day';
                 }
             }
         }
 
         // 4. Perform Uploads in Parallel for Speed
-        const photoUrl = photo ? await uploadToCloudinary(photo) : null;
+        const inPhoto = await resolvePunchPhoto(req, photo, 'punch in');
+        if (!inPhoto.ok) return res.status(inPhoto.status).json({ message: inPhoto.message });
+        const photoUrl = inPhoto.url;
 
         // WFH is a first-class status; wasLate will be set on punch-out so the
         // flag survives the status normalisation (late → present/half-day).
@@ -426,6 +570,82 @@ exports.getToday = async (req, res) => {
 };
 
 /**
+ * The caller's OWN recent days that were closed for them, not by them.
+ *
+ * When nobody punches out, closeForgottenPunches stamps the shift end so the
+ * day can still be graded and paid. That is a fallback, not a measurement --
+ * and on a day with no GPS (so no geofence evaluation either) it is the only
+ * thing the record has to go on. This endpoint is what lets us ask the one
+ * person who actually knows.
+ *
+ * Days already carrying a pending or approved correction are filtered out, so
+ * the prompt stops once the question has been answered. A REJECTED request does
+ * not filter it out: the admin declining one claimed time does not mean the
+ * shift-end default is now correct.
+ */
+exports.getMissedPunchOuts = async (req, res) => {
+    try {
+        const adminId = new mongoose.Types.ObjectId(req.adminId);
+        const employeeId = new mongoose.Types.ObjectId(req.userId);
+
+        const settings = await Settings.findOne({ adminId }).lean();
+        const windowDays = Number(settings?.attendance?.correctionWindowDays) > 0
+            ? Number(settings.attendance.correctionWindowDays)
+            : 7;
+
+        const from = istStartOfDay(new Date(Date.now() - (windowDays - 1) * 24 * 60 * 60 * 1000));
+        const to = istEndOfDay(new Date());
+
+        const rows = await Attendance.find({
+            adminId,
+            employeeId,
+            date: { $gte: from, $lte: to },
+            'shifts.closeReason': 'shift_end',
+        }).select('date punchIn punchOut shifts').lean();
+
+        if (!rows.length) return res.json([]);
+
+        const claimed = new Set(
+            (await Regularization.find({
+                adminId,
+                employeeId,
+                status: { $in: ['pending', 'approved'] },
+                date: { $gte: from, $lte: to },
+            }).select('date').lean()).map((r) => istDateKey(r.date)),
+        );
+
+        const user = await User.findById(employeeId).populate('shiftId', 'name startTime endTime').lean();
+
+        const out = [];
+        for (const a of rows) {
+            const dayKey = istDateKey(a.date);
+            if (claimed.has(dayKey)) continue;
+
+            // By timestamp, not array position -- shifts[] is not ordered.
+            const session = (a.shifts || [])
+                .filter((s) => s && s.closeReason === 'shift_end' && s.punchOut)
+                .sort((x, y) => new Date(y.punchOut) - new Date(x.punchOut))[0];
+            if (!session) continue;
+
+            out.push({
+                attendanceId: a._id,
+                date: a.date,
+                dayKey,
+                punchIn: session.punchIn || a.punchIn,
+                systemPunchOut: session.punchOut,
+                shiftName: user?.shiftId?.name || null,
+                shiftEndTime: user?.shiftId?.endTime || null,
+            });
+        }
+
+        out.sort((x, y) => new Date(y.date) - new Date(x.date));
+        res.json(out);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+/**
  * GET /api/attendance/punch-log?employeeId=&date=YYYY-MM-DD
  *
  * Every raw tap a terminal reported for one employee on one IST day, in tap
@@ -516,7 +736,9 @@ exports.punchOut = async (req, res) => {
         if (outGeo.reject) return res.status(400).json(outGeo.reject);
         const punchOutDistance = outGeo.distance;
 
-        const photoUrl = photo ? await uploadToCloudinary(photo) : null;
+        const outPhoto = await resolvePunchPhoto(req, photo, 'punch out');
+        if (!outPhoto.ok) return res.status(outPhoto.status).json({ message: outPhoto.message });
+        const photoUrl = outPhoto.url;
 
         const punchOutFix = fixQuality(accuracy, fixAt);
         attendance.punchOut = punchOutTime;
@@ -584,6 +806,11 @@ exports.punchOut = async (req, res) => {
         }, settings);
 
         attendance.status = finalStatus;
+        // Rebuilt, not appended. The fragments below describe the day as it
+        // stands NOW, and a day is graded once per session close -- an earlier
+        // session's "Early punch-out" survived into a day that ran to shift
+        // end, because the append guard only ever caught exact repeats.
+        attendance.remarks = stripGradingRemarks(attendance.remarks);
         if (finalStatus === 'half-day' && remarksAppend) {
             attendance.remarks = (attendance.remarks || '') + remarksAppend;
         }
@@ -751,6 +978,7 @@ exports.lunchOut = async (req, res) => {
             return res.status(400).json({ message: 'No lunch-in record found. Please lunch-in first.' });
         }
 
+
         if (attendance.lunchOutTime) {
             return res.status(400).json({ message: 'Already recorded lunch-out for today' });
         }
@@ -759,6 +987,30 @@ exports.lunchOut = async (req, res) => {
         const user = await User.findById(employeeId).populate('branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
+
+        // A break has to last long enough to be a break.
+        //
+        // Observed 2026-09-17: two employees recorded lunches of ONE SECOND
+        // (14:52:48 to 14:52:49 and 18:18:58 to 18:18:59) -- a double tap on
+        // "Start Lunch" then "End Lunch", stored as a real break. It feeds
+        // straight into determineHalfDayStatus and, under a from_punches lunch
+        // policy, into the payroll deduction.
+        //
+        // `punchDebounceSeconds` guards DEVICE taps only; these arrived through
+        // the app, where nothing debounced them. Rejecting rather than silently
+        // ignoring matters: the employee is holding the phone and needs to know
+        // the break did not end, or they will believe it did.
+        const minLunchGapSec = Number(settings?.attendance?.lunchMinGapSeconds) > 0
+            ? Number(settings.attendance.lunchMinGapSeconds)
+            : 60;
+        const lunchGapMs = Date.now() - new Date(attendance.lunchInTime).getTime();
+        if (lunchGapMs >= 0 && lunchGapMs < minLunchGapSec * 1000) {
+            return res.status(400).json({
+                message: `Lunch started ${Math.round(lunchGapMs / 1000)}s ago. `
+                    + `Wait at least ${minLunchGapSec}s before ending it.`,
+                retryable: true,
+            });
+        }
 
         const lunchOutGeo = evaluateGeofence({
             user, settings, rules, location,
@@ -797,7 +1049,29 @@ exports.getReports = async (req, res) => {
 
         if (employeeId) query.employeeId = new mongoose.Types.ObjectId(employeeId);
         if (startDate && endDate) {
-            query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+            // IST day boundaries, NOT the raw strings.
+            //
+            // `new Date('2026-09-17')` is UTC midnight, but an Attendance
+            // `date` is an IST-midnight instant (2026-09-16T18:30:00Z for that
+            // same day). So `{ $gte: <utc midnight>, $lte: <utc midnight> }`
+            // -- which is what a single-day call (startDate === endDate) built
+            // -- excluded the very rows it was asking for and returned an
+            // EMPTY list. Every IST-correct row was unreachable this way; only
+            // legacy rows still sitting at UTC midnight matched, so the bug
+            // looked intermittent rather than total.
+            //
+            // That is what emptied the auto punch-out layer on the tracking
+            // map: `/attendance/reports?startDate=D&endDate=D` returned
+            // nothing, so there were no sessions to plot and the
+            // "why this happened" link had no pin to focus.
+            //
+            // Spanning start-of-first-day..end-of-last-day also keeps the
+            // legacy UTC-midnight rows inside the window, so this widens the
+            // result set and never narrows it.
+            query.date = {
+                $gte: istStartOfDay(new Date(startDate)),
+                $lte: istEndOfDay(new Date(endDate)),
+            };
         }
 
         const reports = await Attendance.find(query).populate({
@@ -817,7 +1091,7 @@ exports.getReports = async (req, res) => {
 exports.updateAttendance = async (req, res) => {
     try {
         const { id } = req.params;
-        const { punchIn, punchOut, lunchInTime, lunchOutTime, status, remarks } = req.body;
+        const { punchIn, punchOut, lunchInTime, lunchOutTime, status, remarks, isWFH } = req.body;
 
         const attendance = await Attendance.findOne({
             _id: new mongoose.Types.ObjectId(id),
@@ -831,6 +1105,24 @@ exports.updateAttendance = async (req, res) => {
         if (lunchOutTime) attendance.lunchOutTime = lunchOutTime;
         if (status) attendance.status = status;
         if (remarks !== undefined) attendance.remarks = remarks;
+
+        // Work From Home is a FLAG, not a grade, and this endpoint used to set
+        // only the grade. An admin correcting a day to "wfh" therefore produced
+        // a row that said Work From Home while `isWFH` stayed false -- so the
+        // day carried no WFH marker in the list, was still measured against the
+        // branch fence, and was still eligible for auto punch-out. Payroll
+        // happened to pay it correctly, because classifyDay() also sniffs the
+        // status and the remarks, which is exactly what masked the split.
+        //
+        // The two are set independently, because they genuinely are independent:
+        // a remote day short of the hours bar grades 'half-day' and is still
+        // remote. An explicit flag from the client wins; a 'wfh' STATUS with no
+        // flag supplied implies it, so no caller can recreate the broken state.
+        if (typeof isWFH === 'boolean') {
+            attendance.isWFH = isWFH;
+        } else if (status === 'wfh') {
+            attendance.isWFH = true;
+        }
 
         await attendance.save();
         res.json(attendance);
@@ -926,14 +1218,24 @@ exports.getStats = async (req, res) => {
         // on the admin dashboard, which is confusing when the two are compared.
         const presentToday = todayRecords.filter(r => ['present', 'late', 'wfh'].includes(r.status)).length;
         const halfDayToday = todayRecords.filter(r => r.status === 'half-day').length;
+        // Surfaced rather than merely excluded. A `needs_review` day is one
+        // that needs an admin to look at it, and a number nobody is shown is a
+        // number nobody acts on.
+        const needsReviewToday = todayRecords.filter(r => r.status === 'needs_review').length;
         const lateArrivals = todayRecords.filter(r => r.status === 'late' || r.wasLate).length;
         const missingPunch = todayRecords.filter(r => r.punchIn && !r.punchOut).length;
-        const absentToday = Math.max(0, activeEmployeeCount - todayRecords.length);
+        // Counted the same way the dashboard counts it -- by GRADE, not by row
+        // count. A row whose status is 'absent' (written by the close job for
+        // somebody who never punched) is absence and has to be included, or
+        // the two pages disagree again in the opposite direction.
+        const gradedPresent = todayRecords.filter(r => ['present', 'late', 'wfh', 'half-day', 'needs_review'].includes(r.status)).length;
+        const absentToday = Math.max(0, activeEmployeeCount - gradedPresent);
 
         res.json({
             date: dayStart.toISOString().slice(0, 10),
             presentToday,
             halfDayToday,
+            needsReviewToday,
             lateArrivals,
             missingPunch,
             absentToday,
@@ -1030,6 +1332,13 @@ exports.getEmployeeHistory = async (req, res) => {
             absent: 0,
             halfDay: 0,
             late: 0,
+            // Both of these existed as stored statuses with nowhere to be
+            // counted. The if/else below fell through for them, so a WFH day
+            // and a needs_review day each occupied a slot in `totalDays` while
+            // appearing in no bucket -- the figures did not add up, and a month
+            // worked entirely from home summed to zero days present.
+            wfh: 0,
+            needsReview: 0,
             festival: 0,
             weeklyOff: 0,
             totalDays: calcUpToDay
@@ -1063,6 +1372,17 @@ exports.getEmployeeHistory = async (req, res) => {
                 else if (record.status === 'late') {
                     summary.present++; // Late counts as present
                     summary.late++;
+                } else if (record.status === 'wfh') {
+                    summary.present++; // worked, just not from the office
+                    summary.wfh++;
+                } else if (record.status === 'needs_review') {
+                    // Deliberately NOT folded into present or absent. The day
+                    // carries a real punch that could not be measured, and
+                    // saying which of the two it is, is exactly the question
+                    // being escalated.
+                    summary.needsReview++;
+                } else if (record.status === 'absent') {
+                    summary.absent++;
                 }
 
                 fullHistory.push({ ...record._doc, duration });
