@@ -119,10 +119,28 @@ exports.addLeave = async (req, res) => {
             return res.status(400).json({ message: 'This overlaps with an existing leave request for the same period.' });
         }
 
-        const duration = await countBusinessDays(req.adminId, employee, startDate, endDate);
-        if (duration <= 0) {
+        // Half day, and which half. Anything unrecognised is a full day rather
+        // than an error: an older client that knows nothing of this field sends
+        // nothing, and must keep booking whole days exactly as it always did.
+        const dayPortion = ['first_half', 'second_half'].includes(req.body.dayPortion)
+            ? req.body.dayPortion
+            : 'full';
+
+        // A half day is a single day by definition. Allowing a range would make
+        // `duration` ambiguous (half of the first day? of every day?) and there
+        // is no answer an approver could act on.
+        if (dayPortion !== 'full' && toLocalDateKey(startDate) !== toLocalDateKey(endDate)) {
+            return res.status(400).json({ message: 'A half-day leave must be for a single date.' });
+        }
+
+        const workingDays = await countBusinessDays(req.adminId, employee, startDate, endDate);
+        if (workingDays <= 0) {
             return res.status(400).json({ message: 'The selected date range has no working days to charge against leave — check weekends/holidays.' });
         }
+        // countBusinessDays still has to run for a half day: it is what proves
+        // the chosen date is a working day at all, so a half day cannot be
+        // booked onto a Sunday or a festival.
+        const duration = dayPortion === 'full' ? workingDays : 0.5;
 
         const leave = await Leave.create({
             adminId: new mongoose.Types.ObjectId(req.adminId),
@@ -131,6 +149,7 @@ exports.addLeave = async (req, res) => {
             startDate,
             endDate,
             duration,
+            dayPortion,
             reason: req.body.reason,
         });
 

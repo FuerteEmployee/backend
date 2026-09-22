@@ -144,12 +144,20 @@ function buildLeaveMap(leaves, leaveTypesById, year, month) {
         const lt = leaveTypesById ? leaveTypesById[String(lv.leaveTypeId)] : null;
         const isPaid = lt ? lt.isPaid !== false : true; // unknown type → treat as paid
         const payWeight = lt && lt.payWeight != null ? lt.payWeight : null;
+        // How much of the DAY this leave covers, as opposed to payWeight, which
+        // is how much of a day the leave TYPE pays. They multiply: a half day of
+        // a type that pays 0.5 is worth 0.25 of a day.
+        const portionWeight = lv.dayPortion && lv.dayPortion !== 'full' ? 0.5 : 1;
         let cur = parseLocalDate(lv.startDate);
         const last = parseLocalDate(lv.endDate || lv.startDate);
         let guard = 0;
         while (cur <= last && guard < 400) {
             if (cur >= monthStart && cur <= monthEnd) {
-                map.set(toLocalDateKey(cur), { isPaid, payWeight, leaveTypeId: lv.leaveTypeId });
+                map.set(toLocalDateKey(cur), {
+                    isPaid, payWeight, portionWeight,
+                    dayPortion: lv.dayPortion || 'full',
+                    leaveTypeId: lv.leaveTypeId,
+                });
             }
             cur.setDate(cur.getDate() + 1);
             guard++;
@@ -261,10 +269,38 @@ function computeTotals(days, config) {
         if (noWorkAtAll && (day.bucket === 'weeklyOff' || day.bucket === 'holiday')) continue;
 
         let w;
-        if (day.bucket === 'paidLeave' && day.leave && day.leave.payWeight != null) {
-            w = day.leave.payWeight; // per-leave-type override
+        if (day.bucket === 'paidLeave') {
+            // Per-leave-type override, else the bucket's own weight.
+            const full = day.leave && day.leave.payWeight != null
+                ? day.leave.payWeight
+                : (config.bucketWeights.paidLeave != null ? config.bucketWeights.paidLeave : 0);
+            // Nobody worked this day, so only the half that was taken is paid.
+            w = full * (day.leave && day.leave.portionWeight != null ? day.leave.portionWeight : 1);
         } else {
             w = config.bucketWeights[day.bucket] != null ? config.bucketWeights[day.bucket] : 0;
+
+            // HALF-DAY LEAVE ON A DAY THAT WAS ALSO WORKED.
+            //
+            // Bucketing ranks attendance above leave, and must keep doing so --
+            // the buckets describe what happened, and what happened is that the
+            // employee attended. But that made a half-day leave worthless: they
+            // came in for the morning, the day graded `halfDay` at 0.5, and the
+            // approved paid half was discarded. They lost half a day's pay AND
+            // half a day's balance for taking leave they were granted.
+            //
+            // A day still belongs to exactly ONE bucket, so the day-sum
+            // invariant is untouched; only the weight is topped up.
+            //
+            // Capped at 1: a full day of attendance plus a half day of leave
+            // cannot pay more than a day. That combination means the leave
+            // should not have been approved, and over-paying is not the way to
+            // report it.
+            if (day.isWorkingDay && day.leave && day.leave.isPaid
+                && day.leave.portionWeight != null && day.leave.portionWeight < 1) {
+                const leaveShare = (day.leave.payWeight != null ? day.leave.payWeight : 1)
+                    * day.leave.portionWeight;
+                w = Math.min(1, w + leaveShare);
+            }
         }
         payableDays += w;
         if (day.workedOnOff) holidayWorkedDays += 1;
