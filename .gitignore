@@ -75,3 +75,6 @@ public/
 ios/build/
 android/app/build/
 .vercel
+
+# Live credentials. Each environment keeps its own copy on disk.
+.env
