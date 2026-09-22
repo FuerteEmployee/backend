@@ -158,7 +158,7 @@ exports.reportClientError = async (req, res) => {
             return res.status(202).json({ ok: true, dropped: 'rate_limited' });
         }
 
-        const KINDS = ['ui', 'network', 'unhandled'];
+        const KINDS = ['ui', 'network', 'unhandled', 'tracker'];
         const occurredAtRaw = req.body.occurredAt ? new Date(req.body.occurredAt) : null;
         const statusCode = Number(req.body.statusCode);
 
