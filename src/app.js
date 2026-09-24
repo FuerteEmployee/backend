@@ -4,8 +4,7 @@ const { notFound, errorHandler } = require("./middleware/error.middleware");
 
 const app = express();
 
-// Body parser
-app.use(express.json());
+
 
 // Enable CORS
 const allowedOrigins = [
@@ -48,6 +47,12 @@ app.use(
         credentials: true,
     }),
 );
+
+
+// Body parser. Punch-in/out requests carry a base64 selfie that regularly
+// exceeded the 100kb default, so allow room for full-resolution photos.
+app.use(express.json({ limit: "5mb" }));
+
 
 // Mount routers
 app.use("/api/users", require("./routes/user_routes"));

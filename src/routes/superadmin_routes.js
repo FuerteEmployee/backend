@@ -22,7 +22,8 @@ const {
     createPlanFeature,
     updatePlanFeature,
     deletePlanFeature,
-    getSystemAnalytics
+    getSystemAnalytics,
+    updateFeatureToggles
 } = require('../controllers/superadmin_controller');
 const {
     getDevices,
@@ -49,6 +50,7 @@ router.post('/tenants', createTenant);
 router.put('/tenants/:id', updateTenant);
 router.delete('/tenants/:id', deactivateTenant);
 router.delete('/tenants/:id/permanent', deleteTenant);
+router.put('/tenants/:id/feature-toggles', updateFeatureToggles);
 
 // Plan management
 router.get('/plans', getPlans);

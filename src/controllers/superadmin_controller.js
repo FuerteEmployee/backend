@@ -214,6 +214,10 @@ exports.getTenants = async (req, res) => {
                 s.adminId.botlensPassword = decryptSecret(s.adminId.botlensPasswordEnc);
                 delete s.adminId.botlensPasswordEnc;
             }
+            // Convert Mongoose Map to plain object for JSON serialization
+            if (s.featureToggles instanceof Map) {
+                s.featureToggles = Object.fromEntries(s.featureToggles);
+            }
         });
 
         res.json({
@@ -748,6 +752,34 @@ exports.deletePlanFeature = async (req, res) => {
         if (!feature) return res.status(404).json({ message: 'Plan feature not found' });
         res.json({ message: 'Plan feature deleted' });
     } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// ─── FEATURE TOGGLES ─────────────────────────────────────────────────────────
+
+exports.updateFeatureToggles = async (req, res) => {
+    try {
+        const { featureToggles } = req.body;
+        if (!featureToggles || typeof featureToggles !== 'object') {
+            return res.status(400).json({ message: 'featureToggles object is required' });
+        }
+
+        const sub = await Subscription.findOne({ adminId: req.params.id });
+        if (!sub) {
+            return res.status(404).json({ message: 'Tenant subscription not found' });
+        }
+
+        // Merge — only update keys that are explicitly sent, leave others as-is.
+        for (const [key, value] of Object.entries(featureToggles)) {
+            sub.featureToggles.set(key, Boolean(value));
+        }
+
+        await sub.save();
+
+        res.json({ message: 'Feature toggles updated', featureToggles: Object.fromEntries(sub.featureToggles) });
+    } catch (error) {
+        console.error('Update feature toggles error:', error);
         res.status(500).json({ message: error.message });
     }
 };

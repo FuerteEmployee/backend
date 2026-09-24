@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getSettings, updateSettings } = require('../controllers/settings_controller');
+const { getSettings, updateSettings, getFeatureToggles } = require('../controllers/settings_controller');
 const { protect, checkPermission } = require('../middleware/auth.middleware');
 const { checkSubscription } = require('../middleware/subscription.middleware');
 const { upload } = require('../config/cloudinary');
@@ -11,6 +11,10 @@ const panelOnly = (req, res, next) => {
     if (role === 'admin' || role === 'superadmin' || role === 'subadmin') return next();
     return res.status(403).json({ message: 'Access denied: Admin only' });
 };
+
+// Feature toggles — what modules the super admin has enabled for this tenant.
+// Readable by any panel role so the sidebar can gate menu items.
+router.get('/feature-toggles', protect, panelOnly, getFeatureToggles);
 
 // --- System Settings ---
 // GET stays readable by all panel roles: several admin pages (employee form,

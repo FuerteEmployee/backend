@@ -42,6 +42,31 @@ const SubscriptionSchema = new mongoose.Schema({
     // so reminders fire at most once each. Reset when a new period begins.
     remindersSent: { type: [Number], default: [] },
 
+    // Per-tenant feature toggles. The super admin enables/disables specific
+    // features for each tenant from the Customers page. When a toggle is
+    // false (or absent), the admin cannot see or use that feature.
+    // Keys mirror the sidebar route slugs so the frontend can gate visibility
+    // with a simple lookup.
+    featureToggles: {
+        type: Map,
+        of: Boolean,
+        default: {
+            tracking: true,
+            geofenceAutoPunchOut: true,
+            leads: true,
+            expenses: true,
+            recruitment: false,
+            training: false,
+            performance: false,
+            projects: false,
+            assets: false,
+            advanceSalary: true,
+            announcements: true,
+            policies: false,
+            biometricDevices: true,
+        },
+    },
+
     // History of plan changes
     history: [{
         action: {

@@ -89,3 +89,41 @@ exports.updateSettings = async (req, res) => {
         res.status(400).json({ message: error.message });
     }
 };
+
+exports.getFeatureToggles = async (req, res) => {
+    try {
+        const Subscription = require('../models/Subscription');
+        const sub = await Subscription.findOne({ adminId: req.adminId }).lean();
+
+        // Default toggles for tenants without a subscription or without toggles set
+        const defaults = {
+            tracking: true,
+            geofenceAutoPunchOut: true,
+            leads: true,
+            expenses: true,
+            recruitment: false,
+            training: false,
+            performance: false,
+            projects: false,
+            assets: false,
+            advanceSalary: true,
+            announcements: true,
+            policies: false,
+            biometricDevices: true,
+        };
+
+        if (!sub || !sub.featureToggles) {
+            return res.json(defaults);
+        }
+
+        // Mongoose .lean() turns Maps into plain objects
+        const toggles = sub.featureToggles instanceof Map
+            ? Object.fromEntries(sub.featureToggles)
+            : (sub.featureToggles || {});
+
+        // Merge with defaults so new keys added later are visible
+        res.json({ ...defaults, ...toggles });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
