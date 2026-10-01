@@ -6,6 +6,7 @@ const User = require('../models/User');
 const { istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, syncRootPunchOut } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
+const { isTenantFeatureEnabled } = require('../utils/feature_toggles');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin-facing surface for the geofence engine: the audit trail, the promotion
@@ -25,25 +26,55 @@ const { logAttendanceEvent } = require('../utils/attendance_event_logger');
  * The abstentions are the point: they are how you tell a correctly-cautious
  * engine apart from one that is silently broken.
  */
+const isId = (v) => typeof v === 'string' && /^[a-f0-9]{24}$/i.test(v);
+const DECISIONS = ['punched_out', 'abstained', 'inside', 'suppressed'];
+
+/**
+ * A punch time sent by the admin panel. An instant with an explicit offset
+ * ("...Z" or "+05:30") is taken as is; a bare "YYYY-MM-DDTHH:MM" is read as
+ * IST, the way the admin typed it, so the host's own timezone can never move
+ * the corrected time.
+ */
+function parseAdminTime(value) {
+    if (typeof value !== 'string' || !value.trim()) return null;
+    const v = value.trim();
+    const naive = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(v);
+    const d = naive
+        ? new Date(`${naive[1]}T${naive[2]}:${naive[3]}:${naive[4] || '00'}+05:30`)
+        : new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+}
+
 exports.getAudit = async (req, res) => {
     try {
         const { employeeId, date, decision, limit } = req.query;
         const query = { adminId: new mongoose.Types.ObjectId(req.adminId) };
 
-        if (employeeId) query.employeeId = new mongoose.Types.ObjectId(employeeId);
-        if (date) query.dayKey = date;
-        if (decision) query.decision = decision;
+        // Refused plainly instead of reaching the database as a cast error.
+        if (employeeId !== undefined && employeeId !== '') {
+            if (!isId(String(employeeId))) return res.status(400).json({ message: 'Choose a valid employee.' });
+            query.employeeId = new mongoose.Types.ObjectId(String(employeeId));
+        }
+        if (date !== undefined && date !== '') {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) return res.status(400).json({ message: 'Choose a valid date.' });
+            query.dayKey = String(date);
+        }
+        if (decision !== undefined && decision !== '') {
+            if (!DECISIONS.includes(String(decision))) return res.status(400).json({ message: 'Unknown decision filter.' });
+            query.decision = String(decision);
+        }
 
         const rows = await GeofenceAudit.find(query)
             .populate('employeeId', 'name phone')
             .populate('branchId', 'branchName')
             .sort({ createdAt: -1 })
-            .limit(Math.min(Number(limit) || 200, 1000))
+            .limit(Math.max(1, Math.min(Math.floor(Number(limit)) || 200, 1000)))
             .lean();
 
         res.json(rows);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[geofence]', error.message);
+        res.status(500).json({ message: 'Something went wrong on our side. Try again.' });
     }
 };
 
@@ -61,7 +92,7 @@ exports.getAudit = async (req, res) => {
  */
 exports.getShadowReport = async (req, res) => {
     try {
-        const days = Math.min(Number(req.query.days) || 14, 90);
+        const days = Math.max(1, Math.min(Math.floor(Number(req.query.days)) || 14, 90));
         const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
         const adminId = new mongoose.Types.ObjectId(req.adminId);
 
@@ -136,7 +167,8 @@ exports.getShadowReport = async (req, res) => {
             })),
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[geofence]', error.message);
+        res.status(500).json({ message: 'Something went wrong on our side. Try again.' });
     }
 };
 
@@ -153,15 +185,36 @@ exports.getShadowReport = async (req, res) => {
  */
 exports.updateAutoPunchOutMode = async (req, res) => {
     try {
-        const { enabled, shadowMode, acknowledgeRisk } = req.body;
+        const { enabled, shadowMode, acknowledgeRisk } = req.body || {};
         const adminId = new mongoose.Types.ObjectId(req.adminId);
 
+        // Both switches must be stated, as true or false. A body missing one
+        // (or sending "false" as text) used to be read as "off" and saved,
+        // quietly changing the mode; now it changes nothing and says why.
+        if (typeof enabled !== 'boolean' || typeof shadowMode !== 'boolean') {
+            return res.status(400).json({ message: 'Send both switches, enabled and shadowMode, as true or false.' });
+        }
+        if (acknowledgeRisk !== undefined && typeof acknowledgeRisk !== 'boolean') {
+            return res.status(400).json({ message: 'acknowledgeRisk must be true or false.' });
+        }
+
         const settings = await Settings.findOne({ adminId });
-        if (!settings) return res.status(404).json({ message: 'Settings not found for this tenant.' });
+        if (!settings) return res.status(404).json({ message: 'Save your company settings once before changing automatic punch-out.' });
 
         const arming = enabled === true && shadowMode === false;
         const currentlyArmed = settings.attendance?.geofenceAutoPunchOut?.shadowMode === false
             && settings.attendance?.geofenceAutoPunchOut?.enabled === true;
+
+        // The super admin has switched this feature off for the tenant. Refuse
+        // to arm (acknowledgeRisk does not override this); disarming and
+        // shadow changes stay allowed, since those are the safe direction.
+        if (arming && !(await isTenantFeatureEnabled(adminId, 'geofenceAutoPunchOut'))) {
+            return res.status(403).json({
+                message: 'Automatic punch-out is not enabled for your organisation. Contact support to turn it on.',
+                featureDisabled: true,
+                feature: 'geofenceAutoPunchOut',
+            });
+        }
 
         if (arming && !currentlyArmed) {
             const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -181,9 +234,9 @@ exports.updateAutoPunchOutMode = async (req, res) => {
 
             if (failures.length && acknowledgeRisk !== true) {
                 return res.status(409).json({
-                    message: 'The shadow run has not yet met the criteria for enabling automatic punch-out.',
+                    message: 'Automatic punch-out cannot be switched on yet: the test run has not collected enough evidence that it decides correctly.',
                     failures,
-                    hint: 'Review GET /api/geofence/shadow-report. If you accept the risk deliberately, resend with acknowledgeRisk: true.',
+                    hint: "Keep it in test mode (it records what it would have done without changing anyone's attendance) until every check passes.",
                 });
             }
         }
@@ -200,7 +253,8 @@ exports.updateAutoPunchOutMode = async (req, res) => {
 
         res.json({ ok: true, autoPunchOut: settings.attendance.geofenceAutoPunchOut });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[geofence]', error.message);
+        res.status(500).json({ message: 'Something went wrong on our side. Try again.' });
     }
 };
 
@@ -219,7 +273,15 @@ exports.updateAutoPunchOutMode = async (req, res) => {
 exports.revertAutoPunchOut = async (req, res) => {
     try {
         const { attendanceId } = req.params;
-        const { mode = 'reopen', punchOut, reason } = req.body;
+        const { mode = 'reopen', punchOut, reason } = req.body || {};
+
+        if (!isId(String(attendanceId))) return res.status(404).json({ message: 'Attendance record not found.' });
+        if (mode !== 'reopen' && mode !== 'correct') {
+            return res.status(400).json({ message: 'Choose to reopen the session or correct the punch-out time.' });
+        }
+        if (reason !== undefined && reason !== null && (typeof reason !== 'string' || reason.length > 300)) {
+            return res.status(400).json({ message: 'The reason must be text of at most 300 characters.' });
+        }
 
         const attendance = await Attendance.findOne({
             _id: attendanceId,
@@ -238,15 +300,25 @@ exports.revertAutoPunchOut = async (req, res) => {
         const user = await User.findById(attendance.employeeId).populate('shiftId').lean();
         const settings = await Settings.findOne({ adminId: attendance.adminId }).lean();
 
+        let correctedAt = null;
         if (mode === 'correct') {
-            const when = new Date(punchOut);
-            if (Number.isNaN(when.getTime())) {
-                return res.status(400).json({ message: 'A valid punchOut time is required to correct the record.' });
+            const when = parseAdminTime(punchOut);
+            if (!when) {
+                return res.status(400).json({ message: 'Enter the time the employee actually left.' });
+            }
+            if (when.getTime() > Date.now() + 60 * 1000) {
+                return res.status(400).json({ message: 'The punch-out time cannot be in the future.' });
             }
             const openedAt = new Date(session?.punchIn || attendance.punchIn);
             if (when < openedAt) {
                 return res.status(400).json({ message: 'The punch-out cannot be earlier than the punch-in.' });
             }
+            // A session runs for a shift, not for days: a time more than a day
+            // after the punch-in is a typo in the date, not a real departure.
+            if (when.getTime() - openedAt.getTime() > 24 * 60 * 60 * 1000) {
+                return res.status(400).json({ message: 'The punch-out must be within 24 hours of the punch-in.' });
+            }
+            correctedAt = when;
             if (session) {
                 session.punchOut = when;
                 session.closeReason = 'admin';
@@ -285,9 +357,9 @@ exports.revertAutoPunchOut = async (req, res) => {
         attendance.geoStatus = null;
 
         attendance.remarks = String(attendance.remarks || '')
-            .replace(' | Auto punch-out (left branch geo-fence)', '')
+            .replace(/\s*\|?\s*Auto punch-out \(left branch geo-fence\)/, '') // also when it was the first remark (no leading " | ")
             .trim() || null;
-        const note = ` | Auto punch-out reverted by admin${reason ? `: ${reason}` : ''}`;
+        const note = ` | Auto punch-out reverted by admin${reason ? `: ${String(reason).trim()}` : ''}`;
         attendance.remarks = (attendance.remarks || '') + note;
 
         attendance.totalWorkMs = computeWorkedMs(attendance, user?.shiftId, settings);
@@ -307,7 +379,7 @@ exports.revertAutoPunchOut = async (req, res) => {
             adminId: attendance.adminId,
             employeeId: attendance.employeeId,
             type: mode === 'correct' ? 'punch-out' : 'punch-in',
-            at: mode === 'correct' ? new Date(punchOut) : (session?.punchIn || attendance.punchIn),
+            at: mode === 'correct' ? correctedAt : (session?.punchIn || attendance.punchIn),
             source: 'admin',
             sessionNumber: (idx >= 0 ? idx : sessions.length - 1) + 1,
             closeReason: 'admin',
@@ -315,6 +387,7 @@ exports.revertAutoPunchOut = async (req, res) => {
 
         res.json({ ok: true, mode, attendance });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[geofence]', error.message);
+        res.status(500).json({ message: 'Something went wrong on our side. Try again.' });
     }
 };

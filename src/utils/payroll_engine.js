@@ -12,7 +12,7 @@
 // applied by the caller (salary_controller.computeSalary).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { isWeeklyOff, toLocalDateKey, istDateKey } = require('./attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, istDateKey, istCalendarDate } = require('./attendance_helpers');
 
 // 'needsReview' is a ninth bucket, added so an unmeasurable day still lands in
 // exactly one bucket and the day-sum invariant continues to hold. It carries no
@@ -33,8 +33,18 @@ const LEGACY_DEFAULT_WEIGHTS = {
 };
 
 // Parse a 'YYYY-MM-DD' string (or Date) as a LOCAL date (no UTC shift).
+//
+// A stored Date (a Leave's startDate, an employee's joiningDate) is read as
+// the IST calendar day it falls on. Reading it with the host's own getters
+// made the answer depend on the server's timezone: a date saved at IST
+// midnight (18:30 UTC the day before) read as the PREVIOUS day on a UTC
+// host. istDateKey gives the same day for both conventions in use -- UTC
+// midnight (05:30 IST, same date) and IST midnight -- on any host.
 function parseLocalDate(s) {
-    if (s instanceof Date) return new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    if (s instanceof Date) {
+        const [y, m, d] = istDateKey(s).split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
     const [y, m, d] = String(s).slice(0, 10).split('-').map(Number);
     return new Date(y, (m || 1) - 1, d || 1);
 }
@@ -172,14 +182,25 @@ function buildLeaveMap(leaves, leaveTypesById, year, month) {
 // paid off-days; a day actually worked wins over a leave record.)
 function classifyMonth({ emp, year, month, asOfDate, attendanceByKey, festivalSet, leaveByKey, workDays }) {
     const totalDaysInMonth = new Date(year, month, 0).getDate();
-    const now = asOfDate ? new Date(asOfDate) : new Date();
+    // asOfDate is a calendar date read with local getters (callers pass
+    // istCalendarDate(...)). With no asOfDate, "today" is the IST calendar
+    // day: `new Date()` read with host getters is still YESTERDAY on a UTC
+    // server between 00:00 and 05:30 IST, which cut a day off the window.
+    const now = asOfDate ? new Date(asOfDate) : istCalendarDate(new Date());
     const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
     const isFuture = year > now.getFullYear() || (year === now.getFullYear() && month > now.getMonth() + 1);
     const windowEnd = isFuture ? 0 : (isCurrentMonth ? now.getDate() : totalDaysInMonth);
 
-    const joinDate = emp?.joiningDate ? new Date(emp.joiningDate) : null;
-    const joinsThisMonth = joinDate && joinDate.getFullYear() === year && joinDate.getMonth() + 1 === month;
-    const windowStart = joinsThisMonth ? joinDate.getDate() : 1;
+    // The pay window starts on the joining date. It is read as an IST
+    // calendar day (see parseLocalDate) so the start does not move with the
+    // host timezone, and a month that ends before the employee joined has an
+    // empty window rather than a full month of "absent" days.
+    const join = emp?.joiningDate ? parseLocalDate(new Date(emp.joiningDate)) : null;
+    const joinIndex = join ? join.getFullYear() * 12 + join.getMonth() + 1 : null;
+    const monthIndex = year * 12 + month;
+    let windowStart = 1;
+    if (joinIndex === monthIndex) windowStart = join.getDate();
+    else if (joinIndex !== null && joinIndex > monthIndex) windowStart = totalDaysInMonth + 1;
 
     const weeklyHolidays = emp?.weeklyHolidays || [];
     const days = [];
@@ -316,13 +337,15 @@ function validateSalary({ counts, windowStart = 1, windowEnd, baseSalary, netSal
     const errors = [];
     const sum = BUCKETS.reduce((a, b) => a + (counts[b] || 0), 0);
     const expectedWindowDays = windowEnd >= windowStart ? (windowEnd - windowStart + 1) : 0;
-    if (sum !== expectedWindowDays) errors.push(`Day-sum invariant failed: ${sum} classified vs ${expectedWindowDays} days in window`);
-    if (!(baseSalary > 0)) errors.push('Base salary missing or non-positive');
-    if (netSalary < 0) errors.push('Net salary is negative');
+    // Worded for the admin who reads them on the salary slip, not for a
+    // developer: these end up in the record's remarks.
+    if (sum !== expectedWindowDays) errors.push(`Only ${sum} of ${expectedWindowDays} days could be counted (day-sum check failed)`);
+    if (!(baseSalary > 0)) errors.push('No monthly salary is set for this employee');
+    if (netSalary < 0) errors.push('Deductions are more than the pay earned, so net pay is below zero');
     // A day the system could not grade must be resolved by a person before this
     // salary is trusted. Paying around it in either direction is a guess.
     if (counts.needsReview > 0) {
-        errors.push(`${counts.needsReview} day(s) need review before this salary can be finalised`);
+        errors.push(`${counts.needsReview} attendance day(s) need checking before this salary can be paid`);
     }
     return { ok: errors.length === 0, errors };
 }

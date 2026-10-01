@@ -17,6 +17,9 @@ const ExpenseSchema = new mongoose.Schema({
     splitGroupId: { type: mongoose.Schema.Types.ObjectId, index: true }, // links sibling records created by one split submission
     splitTotalAmount: { type: Number }, // original total before dividing (only set when splitGroupId is set)
     splitParticipantCount: { type: Number }, // N participants in the split
+    // Why the admin rejected the claim (optional, max 300). Set by the reject
+    // endpoints and shown to the employee; cleared again on approve.
+    adminRemark: { type: String, trim: true, maxlength: 300 },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: { type: Date },
     reimbursedInMonth: { type: Date } // set when this expense's amount was pulled into a Salary payout

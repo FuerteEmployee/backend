@@ -32,7 +32,10 @@ const {
     deleteDevice,
     clearUnresolved,
     getDevicePinMap,
+    getDeviceCompanies,
 } = require('../controllers/device_controller');
+
+const { getFindings, updateFinding, runNow } = require('../controllers/health_controller');
 
 // All routes require superadmin authentication
 router.use(protect, superAdminOnly);
@@ -73,9 +76,15 @@ router.put('/invoices/:id', updateInvoice);
 router.get('/alerts', getAlerts);
 router.put('/alerts/:slug', toggleAlert);
 
+// Health check findings (jobs/health_check.js). Read-only towards business data.
+router.get('/health', getFindings);
+router.post('/health/run', runNow);
+router.patch('/health/:id', updateFinding);
+
 // Biometric machines (eSSL/ZKTeco terminals). Claiming a serial number decides
 // which company's attendance its punches land in, so this stays super-admin only.
 router.get('/devices', getDevices);
+router.get('/devices/companies', getDeviceCompanies); // every company, for the Assign picker
 router.post('/devices', createDevice);
 router.get('/devices/:id/pin-map', getDevicePinMap);
 router.post('/devices/:id/clear-unresolved', clearUnresolved);

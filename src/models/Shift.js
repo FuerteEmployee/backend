@@ -2,11 +2,13 @@ const mongoose = require('mongoose');
 
 const ShiftSchema = new mongoose.Schema({
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    name: { type: String, required: true },
+    name: { type: String, required: true, trim: true },
+    // 'HH:mm' IST wall-clock. An end at or before the start ends the NEXT day
+    // (an overnight shift, e.g. 22:00-06:00). Validated in shift_controller.
     startTime: { type: String, required: true }, // e.g., '09:00'
     endTime: { type: String, required: true },   // e.g., '18:00'
-    halfDayLatePunchInMin: { type: Number, default: 0 },
-    halfDayEarlyPunchOutMin: { type: Number, default: 0 },
+    halfDayLatePunchInMin: { type: Number, default: 0, min: 0 },
+    halfDayEarlyPunchOutMin: { type: Number, default: 0, min: 0 },
     // Per-shift working-days override. null/unset = no override, falls back to
     // the employee's own weeklyHolidays, then the tenant-wide
     // settings.attendance.workDays default (see isWeeklyOff).

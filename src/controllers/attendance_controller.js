@@ -10,8 +10,14 @@ const { cloudinary } = require('../config/cloudinary');
 const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance, PUNCH_MAX_ACCURACY_M } = require('../utils/distance');
 const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs, computeSessionWorkMs, isAfterShiftEnd } = require('../utils/shift_status');
+// Used only by the admin endpoints below (updateAttendance, getReports).
+const { computeSessionGrossMs, syncRootPunchOut, isDayOpen, requiredWorkMs, scheduledLunchMs, resolveGraceMs } = require('../utils/shift_status');
+const Leave = require('../models/Leave');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
-const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istTimeOnDate, applyPunchRounding } = require('../utils/attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istMonthRange, istTimeOnDate, applyPunchRounding } = require('../utils/attendance_helpers');
+const { istCalendarDate, parseIstWallClock, istHHMM } = require('../utils/attendance_helpers');
+const { findWorkingDay } = require('../utils/working_day');
+const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock');
 
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
@@ -249,6 +255,23 @@ function formatDistance(metres) {
 }
 
 /**
+ * "18:30" -> "6:30 PM", for a message an employee reads. The app shows every
+ * time in 12-hour form, so a refusal saying "18:30" next to "06:30 PM" on the
+ * same screen reads as two different times.
+ */
+function hhmm12(hhmm) {
+    const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return hhmm || '';
+    const h = Number(m[1]);
+    return `${h % 12 === 0 ? 12 : h % 12}:${m[2]} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
+/** An instant as IST "6:30 PM". */
+function istTime12(date) {
+    return hhmm12(istHHMM(date));
+}
+
+/**
  * Distance to the nearest fenced branch, and whether this punch must be refused.
  *
  * ONE implementation for every session of the day. The second punch-in used to
@@ -259,7 +282,7 @@ function formatDistance(metres) {
  * Distance is computed whether or not the fence is enforced -- it is evidence.
  * `requireLocation` governs only the refusal.
  */
-function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch }) {
+function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch, requireFix = false }) {
     // Two different lists, because "has no branch" and "has a branch that is
     // not fenced" are opposite situations that this function used to conflate.
     //
@@ -273,6 +296,20 @@ function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunc
     const assigned = [user?.branchId, ...(user?.branchIds || [])].filter(Boolean);
     const branches = assigned.filter((b) => b.geoFenceEnabled !== false);
     const fallback = settings?.attendance?.officeRadius || 3000;
+
+    // No coordinates at all used to PASS: the distance check below only runs
+    // when a location is sent, so a punch with GPS off -- or a direct API call
+    // that simply omitted `location` -- skipped a fence the tenant requires.
+    // Punch-in/out only (`requireFix`); the app already refuses to send these
+    // without a fix, so this closes the gap without changing what employees
+    // see. Work-from-home and device punches are never measured, as before.
+    const hasFix = location?.lat != null && location?.lng != null;
+    if (requireFix && !hasFix && !isWFH && !isDevicePunch && rules.requireLocation && branches.length > 0) {
+        return {
+            distance: null,
+            reject: { message: 'Turn on location (GPS) on your phone to punch. Your punch is checked against your branch.', locationRequired: true },
+        };
+    }
 
     if (!isWFH && branches.length > 0 && location?.lat != null && location?.lng != null) {
         const { distance, radius } = nearestBranchDistance(location.lat, location.lng, branches, fallback);
@@ -326,8 +363,10 @@ exports.getAttendanceRules = getAttendanceRules;
  * Calculates current month stats for the employee to return in punch-in response
  */
 async function getEmployeeSummary(adminId, employeeId) {
-    const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    // The IST month, not the host's: on a UTC server `new Date(y, m, 1)` is
+    // 05:30 IST on the 1st, and the date key built from it named the wrong day.
+    const cal = istCalendarDate();
+    const { start: startOfMonth } = istMonthRange(cal.getFullYear(), cal.getMonth() + 1);
 
     // Count attendance
     const attendanceCount = await Attendance.countDocuments({
@@ -339,7 +378,7 @@ async function getEmployeeSummary(adminId, employeeId) {
     // Count holidays (festivals)
     const holidays = await Festival.countDocuments({
         adminId,
-        startDate: { $gte: startOfMonth.toISOString().split('T')[0] }
+        startDate: { $gte: istDateKey(startOfMonth) }
     });
 
     return { attendanceCount, holidays };
@@ -361,18 +400,31 @@ exports.punchIn = async (req, res) => {
             if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         }
         const now = new Date();
-        const today = istStartOfDay(now);
 
-        // 1. Check if already punched in
-        let attendance = await Attendance.findOne({
-            adminId: new mongoose.Types.ObjectId(req.adminId),
-            employeeId: new mongoose.Types.ObjectId(employeeId),
-            date: today
-        });
-
-        // 2. Fetch User, Shift and Settings
+        // 1. Fetch User, Shift and Settings. The shift comes first because it
+        // decides which day this punch is filed under (see working_day.js).
         const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
+
+        // 2. Check if already punched in
+        const workDay = await findWorkingDay({
+            Attendance,
+            adminId: new mongoose.Types.ObjectId(req.adminId),
+            employeeId: new mongoose.Types.ObjectId(employeeId),
+            shift: user?.shiftId,
+            now,
+        });
+        // A night shift still open from before midnight (or just after its
+        // end) has to be closed first. Opening a second day on top of it is
+        // how a night worker ended up with an open row and a "late" one.
+        if (workDay.row && workDay.row !== workDay.primary && isDayOpen(workDay.row)) {
+            const since = currentPunchIn(workDay.row);
+            return res.status(400).json({
+                message: `You are still punched in from your last shift${since ? ` (since ${istTime12(since)})` : ''}. Punch out first.`,
+            });
+        }
+        const today = workDay.dayStart;
+        let attendance = workDay.primary;
 
         // Rounded per settings.attendance.roundingInterval/Direction (only if
         // 'Punch In' is in roundingAppliedTo) — feeds status/half-day checks and
@@ -399,7 +451,7 @@ exports.punchIn = async (req, res) => {
         const afterEndGraceMs = Math.max(0, Number(settings?.attendance?.punchInGraceAfterShiftEndMins) || 0) * 60 * 1000;
         if (blockAfterEnd && user?.shiftId && isAfterShiftEnd(user.shiftId, punchInTime, afterEndGraceMs)) {
             return res.status(400).json({
-                message: `Your ${user.shiftId.name ? `${user.shiftId.name} shift` : 'shift'} ended at ${user.shiftId.endTime}. `
+                message: `Your ${user.shiftId.name ? `${user.shiftId.name} shift` : 'shift'} ended at ${hhmm12(user.shiftId.endTime)}. `
                     + `Punch-in is closed for today. If you worked, ask your admin to add it through Attendance Regularization.`,
                 shiftEnded: true,
             });
@@ -437,8 +489,20 @@ exports.punchIn = async (req, res) => {
                 });
             }
 
+            // Punching in again the instant after punching out is the mirror of the
+            // instant punch-out: a stray tap on "Punch In Again" made a session with
+            // a one-second gap behind it and used up one of the day's sessions. Same
+            // `workMinGapSeconds` as the other work segments, measured from the last
+            // punch-out. A retry, never a refusal to work.
+            const sinceOutTooSoon = tooSoonSince(
+                attendance.punchOut,
+                minGapSeconds(settings, 'workMinGapSeconds'),
+                { what: 'You punched out', doing: 'punching in again' },
+            );
+            if (sinceOutTooSoon) return res.status(400).json(sinceOutTooSoon);
+
             // The fence applies to EVERY session, not just the first one.
-            const reGeo = evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch: req.isDevicePunch });
+            const reGeo = evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch: req.isDevicePunch, requireFix: true });
             if (reGeo.reject) return res.status(400).json(reGeo.reject);
 
             // Perform multiple punch in
@@ -492,41 +556,22 @@ exports.punchIn = async (req, res) => {
         // 4. Geofencing — compute distance to nearest branch whenever we can
         // (persisted below regardless of enforcement), but only HARD-REJECT
         // the punch when requireLocation is actually turned on for this user.
-        const geo = evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch: req.isDevicePunch });
+        const geo = evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch: req.isDevicePunch, requireFix: true });
         if (geo.reject) return res.status(400).json(geo.reject);
         const punchInDistance = geo.distance;
 
-        // 4. Determine Status (Late Check & Shift-specific Half Day check)
+        // 4. Determine Status (late check only).
+        //
+        // No half-day verdict here. `halfDayLatePunchInMin` used to mark the
+        // day half-day the moment someone was past it, but it is now the
+        // shift's late GRACE: it widens the hours bar, and the day is graded
+        // on hours at punch-out (determineHalfDayStatus + gradeDay). Since
+        // isLatePunchIn uses that same grace, every late arrival was stored as
+        // "Half Day" all day, before a single hour had been measured, and the
+        // cutoff was not overnight-aware. isLatePunchIn is.
         let status = 'present';
-        if (user.shiftId && !isWFH) {
-            if (isLatePunchIn(punchInTime, user.shiftId, settings)) {
-                status = 'late';
-            }
-            if (user.shiftId.halfDayLatePunchInMin) {
-                // istTimeOnDate, NOT setHours.
-                //
-                // setHours resolves in the HOST timezone and production runs on
-                // a UTC box, so a 09:30 shift produced a cutoff at 09:30 UTC =
-                // 15:00 IST — five and a half hours late. The rule therefore
-                // never fired on the live punch path: 87 of 303 rows on tenants
-                // that configured it should have been half-day and were stored
-                // as `present`, including an 14:13 arrival against a 09:35
-                // cutoff.
-                //
-                // The same defect was already fixed in attendance_helpers.js,
-                // shift_status.js, attendance_close.js and
-                // regularization_controller.js — whose comment calls itself
-                // "the fifth copy". This is the sixth, and it is the one every
-                // app and biometric punch actually goes through.
-                const halfDayPunchInCutoff = istTimeOnDate(
-                    user.shiftId.startTime,
-                    punchInTime,
-                    user.shiftId.halfDayLatePunchInMin,
-                );
-                if (halfDayPunchInCutoff && punchInTime > halfDayPunchInCutoff) {
-                    status = 'half-day';
-                }
-            }
+        if (user.shiftId && !isWFH && isLatePunchIn(punchInTime, user.shiftId, settings)) {
+            status = 'late';
         }
 
         // 4. Perform Uploads in Parallel for Speed
@@ -620,13 +665,29 @@ exports.punchIn = async (req, res) => {
  */
 exports.getToday = async (req, res) => {
     try {
-        const attendance = await Attendance.findOne({
+        // The working day, not the calendar day: after midnight a night
+        // worker's open shift is dated yesterday, and answering "not punched
+        // in" would stop the tracker half way through their shift.
+        const me = await User.findById(req.userId)
+            .select('shiftId trackingEnabled departmentId')
+            .populate('shiftId')
+            .populate('departmentId', 'trackingEnabled')
+            .lean();
+        const trackingSettings = await Settings.findOne({ adminId: req.adminId }).select('attendance.trackingMode').lean();
+        // "Keep recording even with no open shift." The native tracker stops itself
+        // when this endpoint shows no open session; `trackAlways` tells it not to.
+        // Only when the company chose "always" AND this person's tracking is on,
+        // so switching someone's tracking off still stops their phone.
+        const trackAlways = trackingSettings?.attendance?.trackingMode === 'always'
+            && (me?.trackingEnabled === true || me?.departmentId?.trackingEnabled === true);
+        const { row: attendance } = await findWorkingDay({
+            Attendance,
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(req.userId),
-            date: { $gte: istStartOfDay(), $lte: istEndOfDay() },
-        })
-            .select('date punchIn punchOut lunchInTime lunchOutTime shifts status totalWorkMs punchOutIsProvisional autoPunchOut autoPunchOutReason')
-            .lean();
+            shift: me?.shiftId,
+            select: 'date punchIn punchOut lunchInTime lunchOutTime shifts status totalWorkMs punchOutIsProvisional autoPunchOut autoPunchOutReason',
+            lean: true,
+        });
 
         // A provisional punch-out is a device toggle that may only be someone
         // leaving for lunch, so the day is NOT closed and tracking must
@@ -636,7 +697,11 @@ exports.getToday = async (req, res) => {
             attendance.punchOut = null;
         }
 
-        res.json(attendance || null);
+        // Unchanged for "on duty": the same row, or null. For "always" the flag is
+        // added (and sent even when there is no row), so a phone that understands
+        // it keeps tracking; an older phone ignores it and behaves as before.
+        if (!trackAlways) return res.json(attendance || null);
+        res.json({ ...(attendance || {}), trackAlways: true });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -761,19 +826,33 @@ exports.punchOut = async (req, res) => {
         const employeeId = req.userId;
         const { location, photo, address, accuracy, fixAt } = req.body;
 
-        const accuracyError = rejectPoorAccuracy(accuracy);
-        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         const now = new Date();
-        const today = istStartOfDay(now);
 
-        const attendance = await Attendance.findOne({
+        const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // The working day: for a night shift after midnight that is the row
+        // opened last night (see working_day.js).
+        const { row: attendance } = await findWorkingDay({
+            Attendance,
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
-            date: today
+            shift: user.shiftId,
+            now,
         });
 
         if (!attendance) {
             return res.status(404).json({ message: 'No punch-in record found for today' });
+        }
+
+        // Same exemption as punch-in: a WFH day is not measured against any
+        // fence, so a poor indoor fix must not strand the employee unable to
+        // close a day they were allowed to open.
+        if (!attendance.isWFH) {
+            const accuracyError = rejectPoorAccuracy(accuracy);
+            if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         }
 
         if (attendance.punchOut) {
@@ -790,18 +869,33 @@ exports.punchOut = async (req, res) => {
         }
 
         // --- Geofencing check for Punch-Out ---
-        const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
+        // Punching out the instant after punching in is the most damaging face of
+        // the same double tap, and it was the one left ungated. This handler used
+        // to say "punch-out is never gated on punch-in", reasoning that closing a
+        // day is the one action an employee must always be able to complete. A
+        // short wait does not stop anyone completing it, though, and without one a
+        // single stray tap made a zero-second day: no hours, graded needs_review,
+        // pays nothing, and (unless multiple punches are on) the employee could not
+        // punch in again -- an admin had to repair it. Reported 2026-09-30 from a
+        // real phone: punch in and out within one second, no gap at all.
+        //
+        // Measured from the CURRENT session's punch-in, like the lunch gate, so a
+        // second shift is judged on when that shift started. Same setting as the
+        // other work segments (`workMinGapSeconds`, default 60, 0 disables). The
+        // employee is told how long to wait; it is a retry, never a refusal to close.
+        const sinceInTooSoon = tooSoonSince(
+            currentPunchIn(attendance),
+            minGapSeconds(settings, 'workMinGapSeconds'),
+            { what: 'You punched in', doing: 'punching out' },
+        );
+        if (sinceInTooSoon) return res.status(400).json(sinceInTooSoon);
+
         // Ending the break and immediately punching out is the third face of
         // the same double tap. Only applies when a lunch-out was actually
-        // recorded -- a day with no break has nothing to measure from, and
-        // punch-out is never gated on punch-in here: closing a day is the one
-        // action an employee must always be able to complete.
+        // recorded -- a day with no break has nothing to measure from.
         const sinceLunchTooSoon = tooSoonSince(
             attendance.lunchOutTime,
             minGapSeconds(settings, 'workMinGapSeconds'),
@@ -816,7 +910,7 @@ exports.punchOut = async (req, res) => {
 
         const outGeo = evaluateGeofence({
             user, settings, rules, location,
-            isWFH: attendance.isWFH, isDevicePunch: req.isDevicePunch,
+            isWFH: attendance.isWFH, isDevicePunch: req.isDevicePunch, requireFix: true,
         });
         if (outGeo.reject) return res.status(400).json(outGeo.reject);
         const punchOutDistance = outGeo.distance;
@@ -934,8 +1028,12 @@ exports.punchOut = async (req, res) => {
             attendance
         });
 
-        // 6. Background Sync Salary
-        calculateAndSaveSalary(req.adminId, user, now.getMonth() + 1, now.getFullYear()).catch(err => {
+        // 6. Background Sync Salary -- for the month the DAY is in, in IST.
+        // `now.getMonth()` is the host's month: on a UTC server a punch-out
+        // before 05:30 IST on the 1st re-synced the month before, and a night
+        // shift closed on the 1st belongs to the previous month's last day.
+        const payMonth = istCalendarDate(attendance.date || now);
+        calculateAndSaveSalary(req.adminId, user, payMonth.getMonth() + 1, payMonth.getFullYear()).catch(err => {
             console.error("Salary Sync Error:", err);
         });
     } catch (error) {
@@ -945,22 +1043,25 @@ exports.punchOut = async (req, res) => {
 
 exports.lunchIn = async (req, res) => {
     try {
-        const accuracyError = rejectPoorAccuracy(req.body?.accuracy);
-        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
-
-        const employeeId = req.body.employeeId || req.userId;
+        const employeeId = req.userId; // never the body: that let a caller start or end a co-worker's lunch
         const { location, address, accuracy } = req.body;
-        const todayStart = istStartOfDay();
-        const todayEnd = istEndOfDay();
 
-        const attendance = await Attendance.findOne({
+        const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
+        const { row: attendance } = await findWorkingDay({
+            Attendance,
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
-            date: { $gte: todayStart, $lte: todayEnd }
+            shift: user?.shiftId,
         });
 
         if (!attendance) {
             return res.status(404).json({ message: 'No attendance record found for today' });
+        }
+
+        // WFH days are not fenced, so a poor fix is no reason to refuse (as punch-in).
+        if (!attendance.isWFH) {
+            const accuracyError = rejectPoorAccuracy(accuracy);
+            if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         }
 
         if (attendance.punchOut) {
@@ -978,8 +1079,20 @@ exports.lunchIn = async (req, res) => {
             attendance.punchOutIsProvisional = false;
         }
 
+        // Lunch already started and not ended. A second "Start Lunch" used to pass
+        // every check below and overwrite lunchInTime, silently shortening the
+        // recorded break (seen live on 2026-09-30: two taps 268 ms apart both
+        // saved). A repeat within a minute is the same tap, so answer as if it
+        // worked; later than that, say when lunch started.
+        if (attendance.lunchInTime && !attendance.lunchOutTime) {
+            const ago = Date.now() - new Date(attendance.lunchInTime).getTime();
+            if (ago >= 0 && ago < 60 * 1000) return res.json(attendance);
+            return res.status(400).json({
+                message: `Lunch already started at ${hhmmIST(attendance.lunchInTime)}. Tap End Lunch when you are back.`,
+            });
+        }
+
         // --- Geofencing check for Lunch-In ---
-        const user = await User.findById(employeeId).populate('branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
@@ -1030,22 +1143,24 @@ exports.lunchIn = async (req, res) => {
 
 exports.lunchOut = async (req, res) => {
     try {
-        const accuracyError = rejectPoorAccuracy(req.body?.accuracy);
-        if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
-
-        const employeeId = req.body.employeeId || req.userId;
+        const employeeId = req.userId; // never the body: that let a caller start or end a co-worker's lunch
         const { location, address, accuracy } = req.body;
-        const todayStart = istStartOfDay();
-        const todayEnd = istEndOfDay();
 
-        const attendance = await Attendance.findOne({
+        const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
+        const { row: attendance } = await findWorkingDay({
+            Attendance,
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
-            date: { $gte: todayStart, $lte: todayEnd }
+            shift: user?.shiftId,
         });
 
         if (!attendance) {
             return res.status(404).json({ message: 'No attendance record found for today' });
+        }
+
+        if (!attendance.isWFH) {
+            const accuracyError = rejectPoorAccuracy(accuracy);
+            if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         }
 
         if (attendance.punchOut) {
@@ -1080,7 +1195,6 @@ exports.lunchOut = async (req, res) => {
         }
 
         // --- Geofencing check for Lunch-Out ---
-        const user = await User.findById(employeeId).populate('branchId branchIds');
         const settings = await Settings.findOne({ adminId: req.adminId });
         const rules = getAttendanceRules(user, settings);
 
@@ -1127,7 +1241,18 @@ exports.getReports = async (req, res) => {
         const { startDate, endDate, employeeId } = req.query;
         const query = { adminId: new mongoose.Types.ObjectId(req.adminId) };
 
-        if (employeeId) query.employeeId = new mongoose.Types.ObjectId(employeeId);
+        // A malformed id used to throw inside the ObjectId constructor and come
+        // back as a 500 carrying the BSON error text.
+        if (employeeId) {
+            if (!mongoose.Types.ObjectId.isValid(String(employeeId))) {
+                return res.status(400).json({ message: 'employeeId is not a valid id' });
+            }
+            query.employeeId = new mongoose.Types.ObjectId(String(employeeId));
+        }
+        if ((startDate && Number.isNaN(new Date(startDate).getTime()))
+            || (endDate && Number.isNaN(new Date(endDate).getTime()))) {
+            return res.status(400).json({ message: 'startDate and endDate must be dates (YYYY-MM-DD)' });
+        }
         if (startDate && endDate) {
             // IST day boundaries, NOT the raw strings.
             //
@@ -1154,24 +1279,98 @@ exports.getReports = async (req, res) => {
             };
         }
 
-        const reports = await Attendance.find(query).populate({
-            path: 'employeeId',
-            select: 'name phone shiftId branchId',
-            populate: [
-                { path: 'shiftId', select: 'name startTime endTime' },
-                { path: 'branchId', select: 'branchName city' },
-            ],
-        });
+        const [reports, settings] = await Promise.all([
+            Attendance.find(query).populate({
+                path: 'employeeId',
+                select: 'name phone shiftId branchId',
+                populate: [
+                    // The grading fields ride along so `grading` below can be
+                    // computed from the same shift the server grades with.
+                    { path: 'shiftId', select: 'name startTime endTime halfDayLatePunchInMin halfDayEarlyPunchOutMin lunch workDays' },
+                    { path: 'branchId', select: 'branchName city' },
+                ],
+            }).lean(),
+            Settings.findOne({ adminId: req.adminId }).lean(),
+        ]);
+
+        // The Full-Day bar each day is measured against, computed by the SAME
+        // functions gradeDay/determineHalfDayStatus use. The detail sheet used
+        // to rebuild it in the browser from the tenant's minLunch + lateGrace,
+        // ignoring the shift's own lunch block and grace, so for a 09:30-18:30
+        // shift with a 60-minute lunch it showed "required 8h55m" against the
+        // server's 7h50m -- and explained half-days with numbers the grade was
+        // never based on.
+        for (const r of reports) {
+            const shift = r.employeeId?.shiftId;
+            if (!shift || typeof shift !== 'object') { r.grading = null; continue; }
+            const ref = r.punchIn ? new Date(r.punchIn) : new Date(r.date);
+            const grace = resolveGraceMs(shift, settings);
+            r.grading = {
+                requiredMs: requiredWorkMs(shift, settings, ref),
+                lunchMs: scheduledLunchMs(shift, settings, ref),
+                graceInMs: grace.inMs,
+                graceOutMs: grace.outMs,
+            };
+        }
         res.json(reports);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
+// ─── Admin edit of one attendance day ────────────────────────────────────────
+
+const EDITABLE_TIME_FIELDS = [
+    ['punchIn', 'Punch in'],
+    ['punchOut', 'Punch out'],
+    ['lunchInTime', 'Lunch start'],
+    ['lunchOutTime', 'Lunch end'],
+];
+const ADMIN_STATUSES = ['present', 'absent', 'half-day', 'late', 'wfh', 'needs_review'];
+
+/** A shift whose end is at or before its start runs past midnight. */
+function isOvernightShift(shift) {
+    const toMin = (t) => {
+        const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+        return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+    };
+    const s = toMin(shift?.startTime);
+    const e = toMin(shift?.endTime);
+    return s !== null && e !== null && e <= s;
+}
+
+const hhmmIST = (d) => new Date(d).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
+
+/**
+ * PUT /api/attendance/:id -- the admin's "Modify Punch Time".
+ *
+ * This used to assign the raw body values to the ROOT fields and save, and
+ * nothing else. Three consequences, all of them silent:
+ *
+ *   1. shifts[] was never touched. allSessions() treats shifts[] as the truth
+ *      the moment it is populated, so the corrected time was computed away:
+ *      totalWorkMs, the half-day grade and payroll all kept the old punch.
+ *      (regularization_controller documents the identical bug on its path.)
+ *   2. The status was whatever the dialog's select held -- the OLD status, since
+ *      it is prefilled -- so moving a 09:50 arrival to 09:30 left the day
+ *      'half-day' and "Late punch-in" in the remarks.
+ *   3. datetime-local strings carry no offset and were cast in the HOST
+ *      timezone. Production runs in UTC, so "09:30" was stored as 15:00 IST.
+ *
+ * Now: times are parsed as IST, validated (on the record's day, out after in,
+ * not in the future), written through to the sessions, and the day is re-graded
+ * with the same functions the punch-out path uses. An explicit status is still
+ * honoured as an override; "auto" (or no status) means "grade it from the times".
+ *
+ * Only whitelisted fields are read from the body -- never spread it.
+ */
 exports.updateAttendance = async (req, res) => {
     try {
         const { id } = req.params;
-        const { punchIn, punchOut, lunchInTime, lunchOutTime, status, remarks, isWFH } = req.body;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(404).json({ message: 'Record not found' });
+        }
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
 
         const attendance = await Attendance.findOne({
             _id: new mongoose.Types.ObjectId(id),
@@ -1179,33 +1378,242 @@ exports.updateAttendance = async (req, res) => {
         });
         if (!attendance) return res.status(404).json({ message: 'Record not found' });
 
-        if (punchIn) attendance.punchIn = punchIn;
-        if (punchOut) attendance.punchOut = punchOut;
-        if (lunchInTime) attendance.lunchInTime = lunchInTime;
-        if (lunchOutTime) attendance.lunchOutTime = lunchOutTime;
-        if (status) attendance.status = status;
-        if (remarks !== undefined) attendance.remarks = remarks;
+        const user = await User.findOne({ _id: attendance.employeeId, adminId: req.adminId }).populate('shiftId');
+        const shift = user?.shiftId || null;
+        const settings = await Settings.findOne({ adminId: req.adminId });
 
-        // Work From Home is a FLAG, not a grade, and this endpoint used to set
-        // only the grade. An admin correcting a day to "wfh" therefore produced
-        // a row that said Work From Home while `isWFH` stayed false -- so the
-        // day carried no WFH marker in the list, was still measured against the
-        // branch fence, and was still eligible for auto punch-out. Payroll
-        // happened to pay it correctly, because classifyDay() also sniffs the
-        // status and the remarks, which is exactly what masked the split.
-        //
-        // The two are set independently, because they genuinely are independent:
-        // a remote day short of the hours bar grades 'half-day' and is still
-        // remote. An explicit flag from the client wins; a 'wfh' STATUS with no
-        // flag supplied implies it, so no caller can recreate the broken state.
-        if (typeof isWFH === 'boolean') {
-            attendance.isWFH = isWFH;
-        } else if (status === 'wfh') {
+        // ── Parse. undefined = leave alone; '' / null = clear the field. ──────
+        const next = {};
+        for (const [field, label] of EDITABLE_TIME_FIELDS) {
+            if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] === undefined) continue;
+            const raw = body[field];
+            if (raw === null || raw === '') { next[field] = null; continue; }
+            if (typeof raw !== 'string') return res.status(400).json({ message: `${label} is not a valid time` });
+            const when = parseIstWallClock(raw);
+            if (!when) return res.status(400).json({ message: `${label} is not a valid time` });
+            next[field] = when;
+        }
+        // Compared with the root AND with the session it maps to: a row the old
+        // version of this endpoint left with the two disagreeing is then
+        // repaired by simply opening it and saving.
+        const liveSessions = (attendance.shifts || []).filter((s) => s && s.punchIn)
+            .sort((a, b) => new Date(a.punchIn) - new Date(b.punchIn));
+        const ms = (d) => (d ? new Date(d).getTime() : null);
+        const timeChanged = Object.keys(next).filter((f) => {
+            const nxt = next[f] ? next[f].getTime() : null;
+            if (ms(attendance[f]) !== nxt) return true;
+            if (!liveSessions.length) return false;
+            if (f === 'punchIn') return ms(liveSessions[0].punchIn) !== nxt;
+            if (f === 'punchOut') return ms(liveSessions[liveSessions.length - 1].punchOut) !== nxt;
+            return false;
+        });
+
+        let explicitStatus = null;
+        if (body.status !== undefined && body.status !== null && body.status !== '' && body.status !== 'auto') {
+            if (!ADMIN_STATUSES.includes(body.status)) {
+                return res.status(400).json({ message: `Status must be one of: ${ADMIN_STATUSES.join(', ')}` });
+            }
+            explicitStatus = body.status;
+        }
+        if (body.remarks !== undefined && body.remarks !== null && typeof body.remarks !== 'string') {
+            return res.status(400).json({ message: 'Remarks must be text' });
+        }
+        if (typeof body.remarks === 'string' && body.remarks.length > 1000) {
+            return res.status(400).json({ message: 'Remarks can be at most 1000 characters' });
+        }
+        if (body.isWFH !== undefined && typeof body.isWFH !== 'boolean') {
+            return res.status(400).json({ message: 'isWFH must be true or false' });
+        }
+
+        // ── Validate the day as it would be after the edit. ──────────────────
+        const merged = {};
+        for (const [field] of EDITABLE_TIME_FIELDS) {
+            merged[field] = field in next ? next[field] : (attendance[field] ? new Date(attendance[field]) : null);
+        }
+        if (timeChanged.length) {
+            const dayStart = istStartOfDay(new Date(attendance.date));
+            const dayEnd = istEndOfDay(new Date(attendance.date));
+            const overnight = isOvernightShift(shift);
+            const latestAllowed = Date.now() + 60 * 1000;
+            const dayLabel = istDateKey(attendance.date);
+            for (const [field, label] of EDITABLE_TIME_FIELDS) {
+                const v = merged[field];
+                if (!v || !timeChanged.includes(field)) continue;
+                const t = v.getTime();
+                // An end may run into the next morning only on a shift that does.
+                const endField = field === 'punchOut' || field === 'lunchOutTime';
+                const upper = endField && overnight ? dayEnd.getTime() + 24 * 60 * 60 * 1000 : dayEnd.getTime();
+                if (t < dayStart.getTime() || t > upper) {
+                    return res.status(400).json({ message: `${label} (${v.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}) is not on ${dayLabel}. An edit must stay on the day it corrects.` });
+                }
+                if (t > latestAllowed) {
+                    return res.status(400).json({ message: `${label} cannot be in the future.` });
+                }
+            }
+            if (merged.punchOut && !merged.punchIn) {
+                return res.status(400).json({ message: 'A punch out needs a punch in.' });
+            }
+            if (merged.punchIn && merged.punchOut && merged.punchOut <= merged.punchIn) {
+                return res.status(400).json({ message: 'Punch out must be after punch in.' });
+            }
+            if (merged.lunchOutTime && !merged.lunchInTime) {
+                return res.status(400).json({ message: 'A lunch end needs a lunch start.' });
+            }
+            if (merged.lunchInTime && merged.lunchOutTime && merged.lunchOutTime <= merged.lunchInTime) {
+                return res.status(400).json({ message: 'Lunch end must be after lunch start.' });
+            }
+            if ((merged.lunchInTime || merged.lunchOutTime) && !merged.punchIn) {
+                return res.status(400).json({ message: 'Lunch needs a punch in on the same day.' });
+            }
+        }
+
+        // ── Apply, writing through to the sessions. ──────────────────────────
+        for (const f of timeChanged) attendance[f] = next[f];
+
+        if (timeChanged.includes('punchIn') || timeChanged.includes('punchOut')) {
+            const sessions = (attendance.shifts || []).filter(Boolean);
+            if (!merged.punchIn) {
+                // No punch-in left means no sessions left.
+                attendance.shifts = [];
+            } else if (sessions.length === 0) {
+                // Legacy single-session row: the root IS the session, so write
+                // one explicitly and every reader sees the same numbers.
+                attendance.shifts = [{
+                    punchIn: merged.punchIn,
+                    punchOut: merged.punchOut || null,
+                    punchInSource: 'admin',
+                    punchOutSource: merged.punchOut ? 'admin' : null,
+                    closeReason: merged.punchOut ? 'admin' : null,
+                }];
+            } else {
+                // Root punchIn is the day's FIRST arrival and root punchOut its
+                // LAST exit, so each edit belongs to that end of the day. By
+                // timestamp, never by index -- shifts[] is not stored in order.
+                const byIn = [...sessions].sort((a, b) => new Date(a.punchIn || 0) - new Date(b.punchIn || 0));
+                if (timeChanged.includes('punchIn')) {
+                    byIn[0].punchIn = merged.punchIn;
+                    byIn[0].punchInSource = 'admin';
+                }
+                if (timeChanged.includes('punchOut')) {
+                    const last = byIn[byIn.length - 1];
+                    last.punchOut = merged.punchOut || null;
+                    last.punchOutSource = merged.punchOut ? 'admin' : null;
+                    last.closeReason = merged.punchOut ? 'admin' : null;
+                }
+                // Every session must still make sense after the edit.
+                for (const s of byIn) {
+                    if (s.punchIn && s.punchOut && new Date(s.punchOut) <= new Date(s.punchIn)) {
+                        return res.status(400).json({
+                            message: `That would leave a session running ${hhmmIST(s.punchIn)} to ${hhmmIST(s.punchOut)}. `
+                                + 'This day has several sessions; correct the middle ones through Attendance Regularization.',
+                        });
+                    }
+                }
+                // An open session anywhere but the end would read as "on duty".
+                const openIdx = byIn.findIndex((s) => s.punchIn && !s.punchOut);
+                if (openIdx !== -1 && openIdx !== byIn.length - 1) {
+                    return res.status(400).json({ message: 'Only the last session of the day can be left without a punch out.' });
+                }
+                syncRootPunchOut(attendance);
+                if (!merged.punchOut) attendance.punchOut = null;
+            }
+        }
+
+        if (timeChanged.includes('punchOut')) {
+            // An admin's time is explicit, never a provisional device toggle.
+            attendance.punchOutIsProvisional = false;
+        }
+        if (timeChanged.length) {
+            // Device day-reconciliation owns only the fields listed here. An
+            // edited field left in the list would be silently overwritten by the
+            // terminal's positional inference on the employee's next tap.
+            attendance.derivedFields = (attendance.derivedFields || []).filter((f) => !timeChanged.includes(f));
+        }
+
+        let wfhChanged = false;
+        if (typeof body.isWFH === 'boolean') {
+            wfhChanged = attendance.isWFH !== body.isWFH;
+            attendance.isWFH = body.isWFH;
+        } else if (explicitStatus === 'wfh') {
+            wfhChanged = !attendance.isWFH;
             attendance.isWFH = true;
         }
 
+        // ── Re-grade, with the punch-out path's own functions. ───────────────
+        const regrade = timeChanged.length > 0 || wfhChanged;
+        if (regrade) {
+            attendance.totalWorkMs = computeWorkedMs(attendance, shift, settings);
+            for (const s of (attendance.shifts || [])) {
+                s.workMs = computeSessionWorkMs(s, attendance, shift);
+                s.grossMs = computeSessionGrossMs(s);
+            }
+            if (timeChanged.includes('punchIn')) {
+                // Re-derived, not only ever set: the arrival itself was corrected.
+                attendance.wasLate = !!(attendance.punchIn && shift && isLatePunchIn(attendance.punchIn, shift, settings));
+            }
+        }
+
+        if (explicitStatus) {
+            attendance.status = explicitStatus;
+        } else if (regrade) {
+            if (!attendance.punchIn) {
+                attendance.status = 'absent';
+                attendance.wasLate = false;
+            } else if (isDayOpen(attendance)) {
+                // An open day has no verdict yet (see gradeDay); only the
+                // arrival can be described.
+                const late = shift ? isLatePunchIn(attendance.punchIn, shift, settings) : false;
+                attendance.status = attendance.isWFH ? 'wfh' : (late ? 'late' : 'present');
+            } else {
+                const { status: graded, remarksAppend } = determineHalfDayStatus({
+                    punchIn: attendance.punchIn,
+                    punchOut: attendance.punchOut,
+                    totalWorkMs: attendance.totalWorkMs,
+                    lunchInTime: attendance.lunchInTime,
+                    lunchOutTime: attendance.lunchOutTime,
+                    isWFH: attendance.isWFH,
+                    shift,
+                }, settings);
+                attendance.status = graded;
+                attendance.remarks = stripGradingRemarks(attendance.remarks);
+                if (graded === 'half-day' && remarksAppend) attendance.remarks = (attendance.remarks || '') + remarksAppend;
+                // Same hours-across-sessions downgrade as punchOut().
+                const hoursGrade = gradeDay(attendance, shift, settings);
+                if (hoursGrade === 'half-day' && attendance.status === 'present') {
+                    attendance.status = 'half-day';
+                    const note = ' | Short hours across sessions';
+                    if (!String(attendance.remarks || '').includes(note.trim())) attendance.remarks = (attendance.remarks || '') + note;
+                }
+            }
+        }
+
+        if (typeof body.remarks === 'string') {
+            attendance.remarks = body.remarks.trim() || null;
+        }
+        if (timeChanged.length && !String(attendance.remarks || '').includes('Edited by admin')) {
+            attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Edited by admin';
+        }
+
         await attendance.save();
+
+        // Evidence trail, as the other correction paths leave one.
+        if (timeChanged.includes('punchIn') && attendance.punchIn) {
+            logAttendanceEvent({ adminId: req.adminId, employeeId: attendance.employeeId, type: 'punch-in', at: attendance.punchIn, source: 'admin', closeReason: 'admin' });
+        }
+        if (timeChanged.includes('punchOut') && attendance.punchOut) {
+            logAttendanceEvent({ adminId: req.adminId, employeeId: attendance.employeeId, type: 'punch-out', at: attendance.punchOut, source: 'admin', closeReason: 'admin' });
+        }
+
         res.json(attendance);
+
+        // Keep the stored payslip in step, as punch-out and regularization do.
+        // The IST month of the record, not the host's.
+        if (user && (regrade || explicitStatus)) {
+            const [y, m] = istDateKey(attendance.date).split('-').map(Number);
+            calculateAndSaveSalary(req.adminId, user, m, y).catch((err) => {
+                console.error('Attendance edit salary sync error:', err);
+            });
+        }
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -1216,17 +1624,35 @@ exports.updateAttendance = async (req, res) => {
 // updateAttendance, which 404s if there's no record yet).
 exports.markAbsent = async (req, res) => {
     try {
-        const { employeeId, date } = req.body;
+        const { employeeId, date } = req.body || {};
         if (!employeeId || !date) {
             return res.status(400).json({ message: 'employeeId and date are required' });
         }
+        if (!mongoose.Types.ObjectId.isValid(String(employeeId))) {
+            return res.status(400).json({ message: 'employeeId is not a valid id' });
+        }
+        const parsed = new Date(date);
+        if (typeof date !== 'string' || Number.isNaN(parsed.getTime())) {
+            return res.status(400).json({ message: 'date must be a date (YYYY-MM-DD)' });
+        }
 
-        const day = istStartOfDay(new Date(date));
+        // The employee must belong to THIS tenant. Without the check any id
+        // was accepted, and an attendance row was written under this admin
+        // for somebody else's employee.
+        const employee = await User.findOne({ _id: employeeId, adminId: req.adminId, role: 'employee' }).populate('shiftId');
+        if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
+        const day = istStartOfDay(parsed);
+        if (day > istStartOfDay(new Date())) {
+            return res.status(400).json({ message: 'A future day cannot be marked absent.' });
+        }
+
+        // Range, not equality: a row written before the IST fix sits at local
+        // or UTC midnight, and an exact match missed it and wrote a duplicate.
         let attendance = await Attendance.findOne({
             adminId: new mongoose.Types.ObjectId(req.adminId),
-            employeeId: new mongoose.Types.ObjectId(employeeId),
-            date: day
+            employeeId: new mongoose.Types.ObjectId(String(employeeId)),
+            date: { $gte: day, $lte: istEndOfDay(day) },
         });
 
         if (!attendance) {
@@ -1239,38 +1665,50 @@ exports.markAbsent = async (req, res) => {
         attendance.punchOutIsProvisional = false;
         attendance.lunchInTime = null;
         attendance.lunchOutTime = null;
-        attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Marked absent by admin';
+        // The sessions and the worked total go too. shifts[] is what every
+        // reader measures, so leaving it behind kept the hours on an "absent"
+        // day -- the detail sheet still listed the sessions, and overtime (which
+        // reads totalWorkMs regardless of status) could still be paid on it.
+        attendance.shifts = [];
+        attendance.totalWorkMs = 0;
+        attendance.wasLate = false;
+        attendance.isWFH = false;
+        attendance.derivedFields = [];
+        attendance.autoPunchOut = false;
+        attendance.autoPunchOutReason = null;
+        attendance.remarks = stripGradingRemarks(attendance.remarks);
+        if (!String(attendance.remarks || '').includes('Marked absent by admin')) {
+            attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Marked absent by admin';
+        }
 
         await attendance.save();
         res.json(attendance);
+
+        const [y, m] = istDateKey(day).split('-').map(Number);
+        calculateAndSaveSalary(req.adminId, employee, m, y).catch((err) => {
+            console.error('Mark-absent salary sync error:', err);
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// Active employees with no Attendance record for today — the ones who never
-// punched in at all (as opposed to Missing Punch, which is punched-in-but-
-// not-out and already has a record).
+// Who is where on one IST day. Lives in utils/day_classification.js so the
+// admin dashboard counts people with exactly the same rules as this page.
+const { classifyDay } = require("../utils/day_classification");
+
+// Active employees expected at work today who have not turned up: no graded
+// row, not on approved leave, not on their weekly off or a holiday. Same
+// classification as the Absent Today card (getStats), so the count on the card
+// is the length of this list.
 exports.getAbsentToday = async (req, res) => {
     try {
-        const todayStart = istStartOfDay();
-        const todayEnd = istEndOfDay();
-
-        const [employees, todayRecords] = await Promise.all([
-            User.find({ adminId: req.adminId, role: 'employee', status: 'active' })
-                .select('name phone shiftId branchId')
-                .populate('shiftId', 'name')
-                .populate('branchId', 'branchName')
-                .lean(),
-            Attendance.find({ adminId: req.adminId, date: { $gte: todayStart, $lte: todayEnd } })
-                .select('employeeId')
-                .lean(),
-        ]);
-
-        const presentIds = new Set(todayRecords.map(a => String(a.employeeId)));
-        const absentees = employees.filter(e => !presentIds.has(String(e._id)));
-
-        res.json(absentees);
+        // ?date=YYYY-MM-DD for another day, so the Attendance page can list the
+        // absent people for the day it is showing (same rule as getStats).
+        const day = req.query.date ? new Date(req.query.date) : new Date();
+        if (Number.isNaN(day.getTime())) return res.status(400).json({ message: 'date must be a date (YYYY-MM-DD)' });
+        const { out } = await classifyDay(req.adminId, day);
+        res.json(out.absent.map(({ weeklyHolidays, ...e }) => e));
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -1281,44 +1719,32 @@ exports.getAbsentToday = async (req, res) => {
 exports.getStats = async (req, res) => {
     try {
         const day = req.query.date ? new Date(req.query.date) : new Date();
-        const dayStart = istStartOfDay(day);
-        const dayEnd = istEndOfDay(day);
+        if (Number.isNaN(day.getTime())) {
+            return res.status(400).json({ message: 'date must be a date (YYYY-MM-DD)' });
+        }
+        const { dayKey, holiday, employees, out, lateArrivals, onDuty, pendingRegularizations } = await classifyDay(req.adminId, day);
 
-        const [activeEmployeeCount, todayRecords, pendingRegularizations] = await Promise.all([
-            User.countDocuments({ adminId: req.adminId, role: 'employee', status: 'active' }),
-            Attendance.find({ adminId: req.adminId, date: { $gte: dayStart, $lte: dayEnd } })
-                .select('status punchIn punchOut wasLate')
-                .lean(),
-            Regularization.countDocuments({ adminId: req.adminId, status: 'pending' }),
-        ]);
-
-        // Half-day gets its own dedicated count (like the dashboard's "Half Day
-        // Today" card) instead of being folded into presentToday — otherwise
-        // this number silently means something different here than it does
-        // on the admin dashboard, which is confusing when the two are compared.
-        const presentToday = todayRecords.filter(r => ['present', 'late', 'wfh'].includes(r.status)).length;
-        const halfDayToday = todayRecords.filter(r => r.status === 'half-day').length;
-        // Surfaced rather than merely excluded. A `needs_review` day is one
-        // that needs an admin to look at it, and a number nobody is shown is a
-        // number nobody acts on.
-        const needsReviewToday = todayRecords.filter(r => r.status === 'needs_review').length;
-        const lateArrivals = todayRecords.filter(r => r.status === 'late' || r.wasLate).length;
-        const missingPunch = todayRecords.filter(r => r.punchIn && !r.punchOut).length;
-        // Counted the same way the dashboard counts it -- by GRADE, not by row
-        // count. A row whose status is 'absent' (written by the close job for
-        // somebody who never punched) is absence and has to be included, or
-        // the two pages disagree again in the opposite direction.
-        const gradedPresent = todayRecords.filter(r => ['present', 'late', 'wfh', 'half-day', 'needs_review'].includes(r.status)).length;
-        const absentToday = Math.max(0, activeEmployeeCount - gradedPresent);
-
+        // Half-day and needs_review keep their own counts (as on the admin
+        // dashboard) rather than being folded into presentToday. Every active
+        // employee is in exactly one of: present, halfDay, needsReview, onLeave,
+        // weeklyOff, holiday, absent -- so these add up to activeEmployees.
         res.json({
-            date: dayStart.toISOString().slice(0, 10),
-            presentToday,
-            halfDayToday,
-            needsReviewToday,
+            // The IST day these numbers are for. This was
+            // dayStart.toISOString().slice(0, 10), and dayStart is IST midnight
+            // -- 18:30 UTC the day BEFORE -- so it always named yesterday.
+            date: dayKey,
+            activeEmployees: employees.length,
+            presentToday: out.present.length + out.late.length + out.wfh.length,
+            halfDayToday: out.halfDay.length,
+            needsReviewToday: out.needsReview.length,
             lateArrivals,
-            missingPunch,
-            absentToday,
+            // Punched in and not (finally) out: on duty now, for today.
+            missingPunch: onDuty,
+            absentToday: out.absent.length,
+            onLeaveToday: out.onLeave.length,
+            weeklyOffToday: out.weeklyOff.length,
+            holidayToday: out.holiday.length,
+            holidayName: holiday,
             pendingRegularizations,
         });
     } catch (error) {
@@ -1364,31 +1790,57 @@ exports.devicePunch = async (req, res) => {
 exports.getEmployeeHistory = async (req, res) => {
     try {
         const employeeId = req.userId;
-        const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        // Today and the month bounds in IST, not host time: on a UTC server
+        // host-midnight month bounds dropped the 1st's row (stored at IST
+        // midnight, i.e. 18:30 UTC the day before) and the 1st read as absent.
+        const [nowY, nowM, nowD] = istDateKey().split('-').map(Number);
+        const month = parseInt(req.query.month) || nowM;
+        const year = parseInt(req.query.year) || nowY;
 
-        const startDate = new Date(year, month - 1, 1);
-        const endDate = new Date(year, month, 0, 23, 59, 59);
+        const { start: startDate, end: endDate } = istMonthRange(year, month);
         const totalDays = new Date(year, month, 0).getDate();
+        const mm = String(month).padStart(2, '0');
+        const monthStartKey = `${year}-${mm}-01`;
+        const monthEndKey = `${year}-${mm}-${String(totalDays).padStart(2, '0')}`;
 
         // Cap calculation to today if we're in the current month
-        const now = new Date();
-        const isCurrentMonth = (now.getFullYear() === year && now.getMonth() + 1 === month);
-        const calcUpToDay = isCurrentMonth ? now.getDate() : totalDays;
+        const isCurrentMonth = (nowY === year && nowM === month);
+        const calcUpToDay = isCurrentMonth ? nowD : totalDays;
 
         // 1. Fetch data
-        const [user, settings, history, festivals] = await Promise.all([
+        const [user, settings, history, festivals, leaves] = await Promise.all([
             User.findById(employeeId).populate('shiftId'),
             Settings.findOne({ adminId: req.adminId }),
             Attendance.find({ adminId: req.adminId, employeeId, date: { $gte: startDate, $lte: endDate } }),
             Festival.find({
                 adminId: req.adminId,
-                $or: [
-                    { startDate: { $gte: startDate.toISOString().split('T')[0], $lte: endDate.toISOString().split('T')[0] } },
-                    { endDate: { $gte: startDate.toISOString().split('T')[0], $lte: endDate.toISOString().split('T')[0] } }
-                ]
-            })
+                // Any festival overlapping the month, including one that
+                // starts before it and ends after it.
+                startDate: { $lte: monthEndKey },
+                endDate: { $gte: monthStartKey },
+            }),
+            Leave.find({
+                adminId: req.adminId, employeeId, status: 'approved',
+                startDate: { $lte: endDate }, endDate: { $gte: startDate },
+            }).populate('leaveTypeId', 'leaveName'),
         ]);
+
+        // Approved leave, keyed by IST day. It was never read here, so a day
+        // off on approved leave showed as "Absent" on the employee's calendar
+        // and counted in their absent total -- while payroll, which reads the
+        // leave itself, paid it. Keys are walked as calendar strings so the
+        // host timezone cannot shift a day.
+        const leaveMap = new Map();
+        for (const l of leaves) {
+            if (!l.startDate || !l.endDate) continue;
+            let key = istDateKey(l.startDate);
+            const lastKey = istDateKey(l.endDate);
+            for (let guard = 0; key <= lastKey && guard < 400; guard++) {
+                leaveMap.set(key, l);
+                const [ky, km, kd] = key.split('-').map(Number);
+                key = new Date(Date.UTC(ky, km - 1, kd + 1)).toISOString().slice(0, 10);
+            }
+        }
 
         const attendanceMap = new Map();
         history.forEach(rec => {
@@ -1421,6 +1873,7 @@ exports.getEmployeeHistory = async (req, res) => {
             needsReview: 0,
             festival: 0,
             weeklyOff: 0,
+            leave: 0,
             totalDays: calcUpToDay
         };
 
@@ -1470,11 +1923,21 @@ exports.getEmployeeHistory = async (req, res) => {
                 // Determine missing day status
                 const festivalName = festivalMap.get(dateStr);
                 const dayIsOff = isWeeklyOff(dayName, d, weeklyHolidays, settings?.attendance?.workDays, user?.shiftId?.workDays);
+                const leave = leaveMap.get(dateStr);
 
                 let status = 'absent';
                 let remarks = '';
 
-                if (festivalName) {
+                if (leave && !festivalName && !dayIsOff) {
+                    // Same precedence as classifyDay: a holiday or weekly off
+                    // stays what it is, and leave covers only working days.
+                    status = 'leave';
+                    const typeName = leave.leaveTypeId?.leaveName || 'Leave';
+                    remarks = leave.dayPortion && leave.dayPortion !== 'full'
+                        ? `${typeName} (half day)`
+                        : typeName;
+                    summary.leave++;
+                } else if (festivalName) {
                     status = 'festival';
                     remarks = festivalName;
                     summary.festival++;
@@ -1514,3 +1977,26 @@ exports.getEmployeeHistory = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// One person's punches run one at a time. Every handler above reads the day and then writes it,
+// so two requests arriving together (a double tap, a retry, the offline queue replaying beside a
+// live tap) each saw "no row yet" and each created one: 3 simultaneous punch-ins made a duplicate
+// attendance day in 14 of 15 races. Queued, the second request runs after the first has written
+// and answers "Already punched in". Wrapped here, after every handler is defined, so the
+// biometric path (iclock -> callHandler) and devicePunch pick up the wrapped versions too.
+// See utils/employee_lock.js for what this does and does not guarantee.
+for (const name of ['punchIn', 'punchOut', 'lunchIn', 'lunchOut']) {
+    exports[name] = serialisePerUser(exports[name], 'punch');
+}
+
+// Mark Absent reads the day and may create it, so it takes the SAME lock as that
+// employee's punches (keyed on the employee in the body, not the admin): racing
+// a punch-in it could otherwise write a second row for the day.
+{
+    const markAbsentUnlocked = exports.markAbsent;
+    exports.markAbsent = (req, res, next) => {
+        const target = req.body && req.body.employeeId ? String(req.body.employeeId) : null;
+        if (!target) return markAbsentUnlocked(req, res, next);
+        return withEmployeeLock(`punch:${target}`, () => markAbsentUnlocked(req, res, next));
+    };
+}

@@ -43,28 +43,17 @@ const SubscriptionSchema = new mongoose.Schema({
     remindersSent: { type: [Number], default: [] },
 
     // Per-tenant feature toggles. The super admin enables/disables specific
-    // features for each tenant from the Customers page. When a toggle is
-    // false (or absent), the admin cannot see or use that feature.
-    // Keys mirror the sidebar route slugs so the frontend can gate visibility
-    // with a simple lookup.
+    // features for each tenant from the Customers page; a false entry hides
+    // the page from the admin panel and 403s its API (checkFeatureToggle).
+    //
+    // Holds ONLY the super admin's explicit choices. There is deliberately no
+    // schema default: a Map default is written into the document the next
+    // time it is saved for any reason (renewal, lifecycle job), freezing
+    // today's defaults into every tenant. An absent key resolves through
+    // FEATURE_TOGGLE_DEFAULTS in utils/feature_toggles.js at read time.
     featureToggles: {
         type: Map,
         of: Boolean,
-        default: {
-            tracking: true,
-            geofenceAutoPunchOut: true,
-            leads: true,
-            expenses: true,
-            recruitment: false,
-            training: false,
-            performance: false,
-            projects: false,
-            assets: false,
-            advanceSalary: true,
-            announcements: true,
-            policies: false,
-            biometricDevices: true,
-        },
     },
 
     // History of plan changes

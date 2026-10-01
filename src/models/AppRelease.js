@@ -46,4 +46,16 @@ const AppReleaseSchema = new mongoose.Schema({
 
 AppReleaseSchema.index({ channel: 1, enabled: 1, createdAt: -1 });
 
+// Never reuse an OTA version (CLAUDE.md). The plugin decides by comparing the
+// version string, so two rows sharing one make "which bundle is this phone
+// running" unanswerable, and a phone already on that version never downloads
+// the second one at all. publishBundle.js checks this too; the guard lives here
+// so every other way a row gets created is held to it. Not a unique index:
+// building one on a live collection would fail on any existing duplicate.
+AppReleaseSchema.pre('validate', async function refuseReusedVersion() {
+    if (!this.isNew && !this.isModified('version')) return;
+    const clash = await this.constructor.exists({ version: this.version, _id: { $ne: this._id } });
+    if (clash) this.invalidate('version', `Version ${this.version} has already been published. Bump the version.`);
+});
+
 module.exports = mongoose.model('AppRelease', AppReleaseSchema);

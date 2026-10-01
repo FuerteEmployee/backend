@@ -7,8 +7,29 @@ const Festival = require('../models/Festival');
 const Settings = require('../models/Settings');
 const Leave = require('../models/Leave');
 const LeaveType = require('../models/LeaveType');
-const { isWeeklyOff, istDateKey, istCalendarDate, toLocalDateKey } = require('../utils/attendance_helpers');
+const mongoose = require('mongoose');
+const { isWeeklyOff, istDateKey, istCalendarDate, istMonthRange, toLocalDateKey } = require('../utils/attendance_helpers');
 const { runEngine, applyRounding, validateSalary, buildLeaveMap } = require('../utils/payroll_engine');
+const { withEmployeeLock } = require('../utils/employee_lock');
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// Today's IST calendar day as { y, m, d }, whatever timezone the host runs in.
+// `new Date().getDate()` on a UTC server is still yesterday until 05:30 IST.
+function istToday() {
+    const t = istCalendarDate(new Date());
+    return { y: t.getFullYear(), m: t.getMonth() + 1, d: t.getDate(), date: t };
+}
+
+// An employee's joining date as a 'YYYY-MM-DD' IST calendar key, or null.
+// Joining dates are stored at UTC midnight (from a date input) and sometimes
+// at IST midnight; istDateKey reads both as the same calendar day.
+function joinKeyOf(emp) {
+    return emp && emp.joiningDate ? istDateKey(emp.joiningDate) : null;
+}
+
+// Matches the ₹1,00,00,000 cap used for advances and expenses.
+const MAX_SALARY_AMOUNT = 10000000;
 
 // Pure computation — returns the salary figures WITHOUT persisting. Used both by
 // calculateAndSaveSalary (payroll generation) and the employee dashboard's live
@@ -18,25 +39,29 @@ const { runEngine, applyRounding, validateSalary, buildLeaveMap } = require('../
 // returns an enriched payload (buckets, payableDays, needsReview, etc.).
 // When false the legacy calculation path runs verbatim — no surprise changes.
 exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount = 0, reimbursementAmount = 0) => {
+    month = Number(month);
+    year = Number(year);
     const totalDaysInMonth = new Date(year, month, 0).getDate();
 
-    const now = new Date();
-    const isCurrentMonth = (now.getFullYear() === year && now.getMonth() + 1 === month);
-    const calcUpToDay = isCurrentMonth ? now.getDate() : totalDaysInMonth;
+    // "Today" is the IST calendar day, independent of the host timezone.
+    const today = istToday();
+    const now = today.date;
+    const isCurrentMonth = (today.y === year && today.m === month);
+    const calcUpToDay = isCurrentMonth ? today.d : totalDaysInMonth;
 
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0, 23, 59, 59);
+    // IST month boundaries. `new Date(year, month - 1, 1)` is HOST midnight:
+    // on a UTC server the 1st's IST-midnight attendance row fell outside the
+    // range (the day read as absent) and the NEXT month's 1st fell inside it.
+    const { start: startDate, end: endDate } = istMonthRange(year, month);
+    const firstKey = `${year}-${pad2(month)}-01`;
+    const lastKey = `${year}-${pad2(month)}-${pad2(totalDaysInMonth)}`;
 
     // Fetch base data (always needed)
     const [attendanceRecords, festivals, settings] = await Promise.all([
         Attendance.find({ adminId, employeeId: emp._id, date: { $gte: startDate, $lte: endDate } }),
-        Festival.find({
-            adminId,
-            $or: [
-                { startDate: { $gte: startDate.toISOString().split('T')[0], $lte: endDate.toISOString().split('T')[0] } },
-                { endDate: { $gte: startDate.toISOString().split('T')[0], $lte: endDate.toISOString().split('T')[0] } },
-            ]
-        }),
+        // Festival dates are 'YYYY-MM-DD' strings. Any festival that overlaps
+        // the month, including one that starts before it and ends after it.
+        Festival.find({ adminId, startDate: { $lte: lastKey }, endDate: { $gte: firstKey } }),
         Settings.findOne({ adminId }),
     ]);
 
@@ -182,12 +207,16 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     }
 
     // ── LEGACY PATH ──────────────────────────────────────────────────────────
-    const joinDate = emp.joiningDate ? new Date(emp.joiningDate) : null;
-    const joinsThisMonth = joinDate && joinDate.getFullYear() === year && joinDate.getMonth() + 1 === month;
-    const startDay = joinsThisMonth ? joinDate.getDate() : 1;
+    // The joining date is compared as an IST calendar key. Comparing the
+    // stored instant with attendance instants dropped the joining day itself:
+    // a joining date saved at UTC midnight is 05:30 IST, and that day's
+    // attendance row sits at IST midnight, five and a half hours earlier.
+    const joinKey = joinKeyOf(emp);
+    const joinsThisMonth = !!joinKey && joinKey.slice(0, 7) === firstKey.slice(0, 7);
+    const startDay = joinsThisMonth ? Number(joinKey.slice(8, 10)) : 1;
 
     // Guard if joined after the requested month
-    if (joinDate && joinDate > endDate) {
+    if (joinKey && joinKey > lastKey) {
         return {
             baseSalary: emp.salary,
             totalSalary: 0,
@@ -300,8 +329,8 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     }
 
     const normalWorkingAttendance = attendanceRecords.reduce((sum, rec) => {
-        if (joinDate && rec.date < joinDate) return sum;
         const dateStr = istDateKey(rec.date);
+        if (joinKey && dateStr < joinKey) return sum;
         if (festivalDates.has(dateStr)) return sum;
         const recDay = istCalendarDate(rec.date);
         const dayName = recDay.toLocaleDateString('en-US', { weekday: 'long' });
@@ -322,6 +351,15 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         festivalCount = 0;
         weeklyOffCount = 0;
     }
+
+    // Days the attendance system could not grade. The legacy formula pays
+    // them nothing (they are not present/late/half-day/wfh); the count is
+    // returned so the run is held for review rather than paid silently.
+    const needsReviewDays = attendanceRecords.filter((rec) => {
+        if (rec.status !== 'needs_review') return false;
+        const key = istDateKey(rec.date);
+        return (!joinKey || key >= joinKey) && Number(key.slice(8, 10)) <= calcUpToDay_legacy;
+    }).length;
 
     const totalDaysInWindow = calcUpToDay_legacy - startDay + 1;
     const payableDays = normalWorkingAttendance + festivalCount + weeklyOffCount + (holidayWorkDays * 2) + leavePaidDays;
@@ -439,6 +477,7 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         grossSalary,
         netSalary,
         totalDaysInWindow,
+        needsReviewDays,
     };
 };
 
@@ -456,51 +495,82 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
         .select('deductedAdvanceRequestIds reimbursedExpenseIds status paidAt paidBy')
         .lean();
     const existingIds = (existing?.deductedAdvanceRequestIds || []).map(String);
-    const allAdvanceIds = Array.from(new Set([...existingIds, ...advanceRequestIds.map(String)]));
+    const validId = (id) => mongoose.Types.ObjectId.isValid(String(id));
+    const newAdvanceIds = advanceRequestIds.map(String).filter((id) => validId(id) && !existingIds.includes(id));
 
     let advances = [];
-    if (allAdvanceIds.length) {
-        // 'repaid' is included so an advance already recovered by an earlier run
-        // of this same month keeps being reflected on every recompute.
+    if (existingIds.length || newAdvanceIds.length) {
+        // 'repaid' is accepted only for advances ALREADY linked to this month's
+        // record, so an advance recovered by an earlier run of this same month
+        // keeps being reflected on every recompute. A newly picked advance
+        // must still be 'approved': accepting 'repaid' for it let an advance
+        // that another month had already recovered be deducted a second time.
         advances = await AdvanceSalaryRequest.find({
-            _id: { $in: allAdvanceIds },
             employeeId: emp._id,
             companyId: adminId,
-            status: { $in: ['approved', 'repaid'] },
+            $or: [
+                { _id: { $in: existingIds }, status: { $in: ['approved', 'repaid'] } },
+                { _id: { $in: newAdvanceIds }, status: 'approved' },
+            ],
         });
     }
+    // Never deduct an advance above the ₹1,00,00,000 request cap. Approval now
+    // refuses these, but a row approved before the cap existed could still be
+    // ticked in the deduction picker and would wipe out the whole payslip.
+    // Skipped, not deducted, and named in the remarks so someone sorts it out.
+    const ADVANCE_CAP = 10000000;
+    const overCapAdvances = advances.filter((a) => !((a.approvedAmount ?? a.amount) <= ADVANCE_CAP));
+    advances = advances.filter((a) => (a.approvedAmount ?? a.amount) <= ADVANCE_CAP);
     const advanceDeductionAmount = advances.reduce((sum, a) => sum + (a.approvedAmount ?? a.amount), 0);
 
     const existingExpenseIds = (existing?.reimbursedExpenseIds || []).map(String);
-    const allExpenseIds = Array.from(new Set([...existingExpenseIds, ...expenseIds.map(String)]));
+    const newExpenseIds = expenseIds.map(String).filter((id) => validId(id) && !existingExpenseIds.includes(id));
 
     let expenses = [];
-    if (allExpenseIds.length) {
-        // 'reimbursed' is included so an expense already reimbursed by an earlier
-        // run of this same month keeps being reflected on every recompute.
+    if (existingExpenseIds.length || newExpenseIds.length) {
+        // 'reimbursed' is accepted only for expenses already linked to this
+        // month's record (see the advances above): a claim reimbursed in
+        // another month must not be paid out again.
         expenses = await Expense.find({
-            _id: { $in: allExpenseIds },
             employeeId: emp._id,
             adminId,
-            status: { $in: ['approved', 'reimbursed'] },
+            $or: [
+                { _id: { $in: existingExpenseIds }, status: { $in: ['approved', 'reimbursed'] } },
+                { _id: { $in: newExpenseIds }, status: 'approved' },
+            ],
         });
     }
+    // Same ceiling as advances. A claim is capped at ₹1,00,00,000 when filed
+    // and when approved, but rows approved before the cap existed (the test
+    // DB holds some near ₹1e114) would otherwise be paid out in full.
+    const overCapExpenses = expenses.filter((e) => !(e.amount <= ADVANCE_CAP));
+    expenses = expenses.filter((e) => e.amount <= ADVANCE_CAP);
     const reimbursementAmount = expenses.reduce((sum, e) => sum + e.amount, 0);
 
     const r = await exports.computeSalary(adminId, emp, month, year, advanceDeductionAmount, reimbursementAmount);
 
     const now = new Date();
-    const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
+    const today = istToday();
+    const isCurrentMonth = today.y === Number(year) && today.m === Number(month);
 
     let status = isCurrentMonth ? 'pending' : 'final';
     let remarks = r.remarks;
+    if (overCapAdvances.length) {
+        remarks = `${remarks ? remarks + ' | ' : ''}Skipped ${overCapAdvances.length} advance(s) over ₹1,00,00,000 — reject or correct them`;
+    }
+    if (overCapExpenses.length) {
+        remarks = `${remarks ? remarks + ' | ' : ''}Skipped ${overCapExpenses.length} expense claim(s) over ₹1,00,00,000 — reject or correct them`;
+    }
 
     const update = {
         baseSalary: r.baseSalary,
         totalSalary: r.totalSalary,
         employmentType: r.employmentType,
         breakdown: r.breakdown,
-        deductions: (r.breakdown.deductions || []).reduce((s, d) => s + (d.amount || 0), 0),
+        // Only deductions that were actually taken off the pay. A component
+        // marked "not included in total" is listed on the slip but not
+        // deducted; counting it here made Deductions bigger than gross − net.
+        deductions: (r.breakdown.deductions || []).reduce((s, d) => s + (d.included === false ? 0 : (d.amount || 0)), 0),
         deductedAdvanceRequestIds: advances.map(a => a._id),
         reimbursedExpenseIds: r.payableDays > 0 ? expenses.map(e => e._id) : [],
         remarks,
@@ -510,6 +580,18 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
         payableDays: r.payableDays,
         totalDaysInWindow: r.totalDaysInWindow,
     };
+
+    // Legacy path: a day the attendance system could not grade is paid
+    // nothing by the legacy formula. Hold the run for review, the same way
+    // the engine path does, instead of letting it reach a payslip silently.
+    // The amount itself is unchanged.
+    if (!r._engineEnabled && r.needsReviewDays > 0) {
+        update.needsReview = true;
+        update.status = 'review';
+        update.remarks = `${remarks || ''} | ${r.needsReviewDays} attendance day(s) need checking before this salary can be paid`;
+    } else if (!r._engineEnabled) {
+        update.needsReview = false;
+    }
 
     if (r._engineEnabled) {
         // Validate before persisting — flag bad records rather than silently paying wrong amounts
@@ -586,35 +668,97 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
     return saved;
 };
 
-// Recompute + save salary for a single employee, optionally recovering one or
-// more of their approved advance-salary/loan requests in this run. Used by the
+// One salary computation per employee-month at a time. The save above is an
+// upsert with no unique index behind it (Salary.js), and it is reached from
+// Generate, Generate-one, and every punch-out / leave / correction recalc, all
+// fire-and-forget: two arriving together each found no row and each created one,
+// and both read the same approved advances and expenses. Queued, the second run
+// finds the first one's row and updates it.
+{
+    const calculateUnlocked = exports.calculateAndSaveSalary;
+    exports.calculateAndSaveSalary = (adminId, emp, month, year, ...rest) =>
+        withEmployeeLock(`salary:${String(emp?._id || emp)}:${year}-${month}`, () => calculateUnlocked(adminId, emp, month, year, ...rest));
+}
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const monthLabel = (m, y) => `${MONTH_NAMES[m - 1]} ${y}`;
+const formatJoinKey = (key) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return `${d} ${MONTH_NAMES[m - 1].slice(0, 3)} ${y}`;
+};
+
+// Reads and checks the month/year a salary request is for. Returns
+// { month, year } or { error } with a message an admin can act on.
+//
+// The body used to go straight into the calculation, uncast. A month sent as
+// the string "9" compared unequal to the number 9 everywhere the code asked
+// "is this the current month?" or "did they join this month?" -- so the
+// current month was treated as complete and a mid-month joiner was paid
+// from the 1st.
+function parseMonthYear(src, { allowFuture = false } = {}) {
+    const month = Number(src && src.month);
+    const year = Number(src && src.year);
+    if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2100) {
+        return { error: 'Choose a valid month and year.' };
+    }
+    if (!allowFuture) {
+        const t = istToday();
+        if (year * 12 + month > t.y * 12 + t.m) {
+            return { error: `${monthLabel(month, year)} has not started yet, so there is no salary to work out for it.` };
+        }
+    }
+    return { month, year };
+}
+
+// Why an employee has no salary for a month, or null when they do.
+function notEmployedReason(emp, month, year) {
+    const joinKey = joinKeyOf(emp);
+    const lastKey = `${year}-${pad2(month)}-${pad2(new Date(year, month, 0).getDate())}`;
+    if (joinKey && joinKey > lastKey) {
+        return `${emp.name || 'This employee'} joined on ${formatJoinKey(joinKey)}, so there is no salary for ${monthLabel(month, year)}.`;
+    }
+    return null;
+}
+
+// Recompute + save salary for a single employee, optionally recovering one
+// or more of their approved advance-salary/loan requests in this run. Used by the
 // payroll UI's per-employee "apply advance deduction" action.
 exports.generateSalaryForEmployee = async (req, res) => {
     try {
-        const { employeeId, month, year, advanceRequestIds, expenseIds } = req.body;
-        if (!employeeId || !month || !year) {
-            return res.status(400).json({ message: 'employeeId, month and year are required' });
+        const { employeeId, advanceRequestIds, expenseIds } = req.body || {};
+        if (!employeeId) {
+            return res.status(400).json({ message: 'Choose an employee.' });
         }
+        if (!mongoose.Types.ObjectId.isValid(String(employeeId))) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+        const period = parseMonthYear(req.body);
+        if (period.error) return res.status(400).json({ message: period.error });
 
         const adminId = req.adminId;
         const emp = await User.findOne({ _id: employeeId, adminId, role: 'employee' }).populate('shiftId');
         if (!emp) return res.status(404).json({ message: 'Employee not found' });
 
+        const notEmployed = notEmployedReason(emp, period.month, period.year);
+        if (notEmployed) return res.status(400).json({ message: notEmployed });
+
         const salaryRecord = await exports.calculateAndSaveSalary(
-            adminId, emp, Number(month), Number(year),
+            adminId, emp, period.month, period.year,
             Array.isArray(advanceRequestIds) ? advanceRequestIds : [],
             Array.isArray(expenseIds) ? expenseIds : []
         );
         res.status(200).json(salaryRecord);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('generateSalaryForEmployee error:', error);
+        res.status(500).json({ message: 'Could not work out this salary. Please try again.' });
     }
 };
 
 exports.generateSalaries = async (req, res) => {
     try {
-        const { month, year } = req.body;
-        if (!month || !year) return res.status(400).json({ message: 'Month and Year are required' });
+        const period = parseMonthYear(req.body);
+        if (period.error) return res.status(400).json({ message: period.error });
+        const { month, year } = period;
 
         const adminId = req.adminId;
 
@@ -623,8 +767,16 @@ exports.generateSalaries = async (req, res) => {
         const results = [];
         const needsReview = [];
         const errors = [];
+        const skipped = [];
 
         for (const emp of employees) {
+            // Someone who joined after this month has no salary for it; a ₹0
+            // record for them only clutters the month.
+            const notEmployed = notEmployedReason(emp, month, year);
+            if (notEmployed) {
+                skipped.push({ employeeId: emp._id, name: emp.name, reason: notEmployed });
+                continue;
+            }
             try {
                 const salaryRecord = await exports.calculateAndSaveSalary(adminId, emp, month, year);
                 results.push(salaryRecord);
@@ -632,44 +784,76 @@ exports.generateSalaries = async (req, res) => {
                     needsReview.push({ employeeId: emp._id, name: emp.name, remarks: salaryRecord.remarks });
                 }
             } catch (err) {
-                errors.push({ employeeId: emp._id, name: emp.name, error: err.message });
+                console.error(`generateSalaries: ${emp._id}:`, err);
+                errors.push({ employeeId: emp._id, name: emp.name, error: 'Could not work out this salary' });
             }
         }
 
+        const parts = [`Salary worked out for ${results.length} employee${results.length === 1 ? '' : 's'} for ${monthLabel(month, year)}`];
+        if (needsReview.length) parts.push(`${needsReview.length} need${needsReview.length === 1 ? 's' : ''} checking before payment`);
+        if (errors.length) parts.push(`${errors.length} could not be worked out`);
+        if (skipped.length) parts.push(`${skipped.length} skipped (joined later)`);
+
         res.status(201).json({
-            message: `Generated ${results.length} salary records`,
+            message: parts.join('. ') + '.',
             count: results.length,
             needsReview,
             errors,
+            skipped,
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('generateSalaries error:', error);
+        res.status(500).json({ message: 'Could not generate payroll. Please try again.' });
     }
 };
 
 exports.getSalaryByEmployee = async (req, res) => {
     try {
+        if (!mongoose.Types.ObjectId.isValid(String(req.params.employeeId))) {
+            return res.status(404).json({ message: 'Employee not found' });
+        }
+        // An employee may read only their own salary history. The id comes
+        // from the URL, so without this any employee could read a co-worker's
+        // pay by swapping it in. The panel roles keep full access.
+        const role = req.currentUser?.role || req.user?.role;
+        if (role === 'employee' && String(req.params.employeeId) !== String(req.userId)) {
+            return res.status(403).json({ message: 'You can only see your own salary.' });
+        }
         const salaries = await Salary.find({
             adminId: req.adminId,
             employeeId: req.params.employeeId
         }).sort({ year: -1, month: -1 });
         res.json(salaries);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('getSalaryByEmployee error:', error);
+        res.status(500).json({ message: 'Could not load salary history.' });
     }
 };
 
 exports.getMonthlyReport = async (req, res) => {
     try {
-        const { month, year } = req.query;
+        // Month and year are required: with either missing, the filter
+        // dropped the undefined key and returned every salary of the company.
+        const period = parseMonthYear(req.query, { allowFuture: true });
+        if (period.error) return res.status(400).json({ message: period.error });
         const salaries = await Salary.find({
             adminId: req.adminId,
-            month,
-            year
-        }).populate('employeeId', 'name phone');
+            month: period.month,
+            year: period.year,
+        }).populate({
+            path: 'employeeId',
+            // Department and branch names drive the page's two filters, which
+            // matched nothing while only name/phone were populated.
+            select: 'name phone departmentId branchId',
+            populate: [
+                { path: 'departmentId', select: 'name' },
+                { path: 'branchId', select: 'branchName' },
+            ],
+        });
         res.json(salaries);
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('getMonthlyReport error:', error);
+        res.status(500).json({ message: 'Could not load salaries for this month.' });
     }
 };
 
@@ -684,45 +868,95 @@ exports.getMonthlyReport = async (req, res) => {
 // unverifiable after the fact, which is the one property the engine exists to
 // guarantee.
 const SALARY_EDITABLE_FIELDS = ['status', 'bonus', 'deductions', 'remarks', 'totalSalary', 'netSalary'];
+const SALARY_AMOUNT_FIELDS = ['bonus', 'deductions', 'totalSalary', 'netSalary'];
+const SALARY_STATUSES = ['paid', 'pending', 'final', 'review'];
 
 exports.updateSalary = async (req, res) => {
     try {
+        if (!mongoose.Types.ObjectId.isValid(String(req.params.id))) {
+            return res.status(404).json({ message: 'Salary record not found' });
+        }
+        const body = req.body || {};
         const update = {};
         for (const key of SALARY_EDITABLE_FIELDS) {
-            if (req.body[key] !== undefined) update[key] = req.body[key];
+            if (body[key] !== undefined) update[key] = body[key];
         }
+
+        // Amounts: plain numbers from ₹0 to ₹1,00,00,000. A negative or absurd
+        // figure used to be saved as typed.
+        for (const key of SALARY_AMOUNT_FIELDS) {
+            if (update[key] === undefined) continue;
+            const n = typeof update[key] === 'string' && update[key].trim() !== '' ? Number(update[key]) : update[key];
+            if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > MAX_SALARY_AMOUNT) {
+                return res.status(400).json({ message: 'Enter an amount between ₹0 and ₹1,00,00,000.' });
+            }
+            update[key] = Math.round(n * 100) / 100;
+        }
+        // Net pay is stored twice (totalSalary for the salary list, netSalary
+        // for payslips). Editing one left the other showing the old figure.
+        if (update.totalSalary !== undefined && update.netSalary === undefined) update.netSalary = update.totalSalary;
+        if (update.netSalary !== undefined && update.totalSalary === undefined) update.totalSalary = update.netSalary;
+
+        if (update.remarks !== undefined) {
+            if (typeof update.remarks !== 'string' || update.remarks.length > 500) {
+                return res.status(400).json({ message: 'Remarks must be text of up to 500 characters.' });
+            }
+        }
+        if (update.status !== undefined && !SALARY_STATUSES.includes(update.status)) {
+            return res.status(400).json({ message: 'Choose a valid status.' });
+        }
+
+        const existing = await Salary.findOne({ _id: req.params.id, adminId: req.adminId })
+            .select('status paidAt needsReview')
+            .lean();
+        if (!existing) return res.status(404).json({ message: 'Salary record not found' });
 
         // Marking a row paid is the one transition that has to leave a trace.
         // `status` alone cannot be that trace -- payroll generation recomputes
         // it -- so stamp who paid it and when, and let those outlive any later
         // regenerate. See the paid-record guard in calculateAndSaveSalary.
         if (update.status === 'paid') {
-            const existing = await Salary.findOne({ _id: req.params.id, adminId: req.adminId })
-                .select('paidAt')
-                .lean();
+            // A salary held for review has attendance days nobody has checked;
+            // paying it is paying a guess. The page hides the button, and this
+            // closes the same door for a direct call.
+            if (existing.status === 'review' || existing.needsReview) {
+                return res.status(409).json({
+                    message: 'This salary has attendance days that still need checking. Correct those days, recalculate, and then mark it paid.',
+                });
+            }
             // Only on the transition INTO paid, so re-saving an already-paid row
             // keeps the original payment date rather than moving it to today.
-            if (!existing?.paidAt) {
+            if (!existing.paidAt) {
                 update.paidAt = new Date();
                 update.paidBy = req.userId;
             }
+        } else if (update.status !== undefined && (existing.status === 'paid' || existing.paidAt)) {
+            // Undoing a payment recorded in error. This is the step the delete
+            // refusal tells the admin to take; leaving paidAt behind meant the
+            // record could still never be deleted.
+            update.paidAt = null;
+            update.paidBy = null;
         }
 
         const salary = await Salary.findOneAndUpdate(
             { _id: req.params.id, adminId: req.adminId },
-            update,
+            { $set: update },
             { new: true, runValidators: true }
         );
         if (!salary) return res.status(404).json({ message: 'Salary record not found' });
         res.json(salary);
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        console.error('updateSalary error:', error);
+        res.status(400).json({ message: 'Could not save this salary. Check the values and try again.' });
     }
 };
 
 exports.deleteSalary = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(String(id))) {
+            return res.status(404).json({ message: 'Salary record not found' });
+        }
 
         // Deleting a paid payslip destroys the only record that the payment
         // happened, and there is no undo anywhere in this flow. Refuse it and
@@ -730,7 +964,7 @@ exports.deleteSalary = async (req, res) => {
         // discard a payment record is explicit and separately auditable,
         // instead of a side effect of tidying up a salary list.
         const existing = await Salary.findOne({ _id: id, adminId: req.adminId })
-            .select('status paidAt')
+            .select('status paidAt employeeId deductedAdvanceRequestIds reimbursedExpenseIds')
             .lean();
         if (!existing) return res.status(404).json({ message: 'Salary record not found' });
         if (existing.status === 'paid' || existing.paidAt) {
@@ -743,9 +977,27 @@ exports.deleteSalary = async (req, res) => {
             _id: id,
             adminId: req.adminId
         });
+
+        // Hand back what this record had taken. Generating it marked its
+        // advances 'repaid' and its expenses 'reimbursed'; with the record
+        // gone that recovery/payout never happens, yet both stayed closed --
+        // the advance was never recovered and the claim never paid. They go
+        // back to 'approved' so a later payroll can pick them up.
+        if (existing.deductedAdvanceRequestIds?.length) {
+            await AdvanceSalaryRequest.updateMany(
+                { _id: { $in: existing.deductedAdvanceRequestIds }, companyId: req.adminId, employeeId: existing.employeeId, status: 'repaid' },
+                { $set: { status: 'approved' }, $unset: { repaidAt: 1, deductedInMonth: 1 } }
+            );
+        }
+        if (existing.reimbursedExpenseIds?.length) {
+            await Expense.updateMany(
+                { _id: { $in: existing.reimbursedExpenseIds }, adminId: req.adminId, employeeId: existing.employeeId, status: 'reimbursed' },
+                { $set: { status: 'approved' }, $unset: { reimbursedInMonth: 1 } }
+            );
+        }
         res.json({ message: 'Salary record deleted' });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('deleteSalary error:', error);
+        res.status(500).json({ message: 'Could not delete this salary record. Please try again.' });
     }
 };
-

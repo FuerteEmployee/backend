@@ -3,6 +3,7 @@ const router = express.Router();
 const { runSubscriptionLifecycle } = require('../jobs/subscription_lifecycle');
 const { runDeviceHealthCheck } = require('../jobs/device_health');
 const { closeForgottenPunches } = require('../jobs/attendance_close');
+const { runHealthCheck } = require('../jobs/health_check');
 
 // Guard cron endpoints with a shared secret so only the scheduler (Vercel Cron,
 // an external uptime trigger, or an authorised operator) can run them.
@@ -66,5 +67,23 @@ const runDeviceHealth = async (req, res) => {
 
 router.post('/device-health', requireCronSecret, runDeviceHealth);
 router.get('/device-health', requireCronSecret, runDeviceHealth);
+
+// The read-only health check (findings on Super admin -> Health). Same dual
+// wiring. ?deep=1 also scans the last day of location points; ?dryRun=1
+// returns the findings without storing them.
+const runHealth = async (req, res) => {
+    try {
+        const summary = await runHealthCheck(new Date(), {
+            dryRun: req.query.dryRun === '1',
+            deep: req.query.deep === '1' ? true : undefined,
+        });
+        res.json({ ok: true, summary });
+    } catch (error) {
+        res.status(500).json({ ok: false, message: error.message });
+    }
+};
+
+router.post('/health-check', requireCronSecret, runHealth);
+router.get('/health-check', requireCronSecret, runHealth);
 
 module.exports = router;

@@ -155,6 +155,24 @@ const AttendanceSchema = new mongoose.Schema({
         default: null,
     },
 
+    // Every approved correction of a punch on this day, oldest first. The pay
+    // maths reads only the punch fields above, which hold the CORRECTED time;
+    // this is the reference the owner asked to keep ("10 is kept as reference
+    // for the future as well") and is shown, never paid from. Written only by
+    // regularization_controller's approval, from the approved Regularization.
+    corrections: [{
+        _id: false,
+        field: { type: String, enum: ['punchIn', 'punchOut', 'lunchInTime', 'lunchOutTime'] },
+        from: { type: Date, default: null },
+        to: { type: Date, default: null },
+        regularizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Regularization', default: null },
+        approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        // Denormalised so a day-detail read needs no populate, and still says
+        // who approved it after that sub-admin's account is removed.
+        approvedByName: { type: String, default: null },
+        approvedAt: { type: Date, default: null },
+    }],
+
     remarks: { type: String, default: null }
 }, { timestamps: true });
 

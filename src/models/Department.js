@@ -7,8 +7,10 @@ const DepartmentSchema = new mongoose.Schema({
         required: true,
         index: true 
     },
-    name: { type: String, required: true },
-    colorCode: { type: String, default: '#000000' },
+    // trim: stored names carried stray trailing spaces ("Development "), and a
+    // whitespace-only name passed `required` untrimmed.
+    name: { type: String, required: true, trim: true },
+    colorCode: { type: String, default: '#000000', trim: true },
 
     // ── Location policy, decided per department ──────────────────────────────
     //
@@ -39,7 +41,14 @@ const DepartmentSchema = new mongoose.Schema({
      * A per-employee User.geofenceExempt still excludes individuals from an
      * otherwise enabled department.
      */
-    autoPunchOutEnabled: { type: Boolean, default: false }
+    autoPunchOutEnabled: { type: Boolean, default: false },
+    /**
+     * Field staff: work away from a branch, so auto punch-out never ends their
+     * day. null = not set yet, in which case isFieldRole() still falls back to
+     * matching the department NAME (the old, only mechanism), so existing
+     * "Sales" departments keep their exemption until an admin decides.
+     */
+    isFieldStaff: { type: Boolean, default: null }
 }, { timestamps: true });
 
 DepartmentSchema.index({ adminId: 1, name: 1 });

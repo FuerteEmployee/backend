@@ -59,4 +59,13 @@ const ApkReleaseSchema = new mongoose.Schema({
 // Newest-first within a channel is the only read this collection serves.
 ApkReleaseSchema.index({ channel: 1, enabled: 1, versionCode: -1 });
 
+// A versionCode is used once, ever: every out-of-date decision (including the
+// mandatory punch block) is made on it. publishApk checks this too; the guard
+// here covers any other path that creates a row.
+ApkReleaseSchema.pre('validate', async function refuseReusedVersionCode() {
+    if (!this.isNew && !this.isModified('versionCode')) return;
+    const clash = await this.constructor.exists({ versionCode: this.versionCode, _id: { $ne: this._id } });
+    if (clash) this.invalidate('versionCode', `versionCode ${this.versionCode} has already been published.`);
+});
+
 module.exports = mongoose.model('ApkRelease', ApkReleaseSchema);

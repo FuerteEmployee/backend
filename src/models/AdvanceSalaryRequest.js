@@ -50,6 +50,14 @@ const AdvanceSalaryRequestSchema = new mongoose.Schema({
         type: Number,
         min: 0
     },
+    // Why the admin said no. Optional, set only by the reject endpoint, and
+    // shown to the employee on the rejected request. Same name as the remark
+    // on Leave, Regularization and Ticket.
+    adminRemark: {
+        type: String,
+        trim: true,
+        maxlength: 300
+    },
     reviewedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

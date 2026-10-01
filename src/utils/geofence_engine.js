@@ -56,6 +56,7 @@ const {
 const { istStartOfDay, istEndOfDay, istDateKey } = require('./attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, allSessions, syncRootPunchOut, MAX_SESSIONS } = require('./shift_status');
 const { isTrustworthyFix, nearestBranchDistance } = require('./distance');
+const { isTenantFeatureEnabled } = require('./feature_toggles');
 const { logAttendanceEvent } = require('./attendance_event_logger');
 const { sendAutoPunchOutNotice } = require('../jobs/notify');
 
@@ -228,9 +229,10 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
     const dayKey = istDateKey(now);
     const base = { adminId, employeeId, dayKey };
 
-    const [user, settings] = await Promise.all([
+    const [user, settings, featureAllowed] = await Promise.all([
         User.findById(employeeId).populate('shiftId branchId branchIds departmentId').lean(),
         Settings.findOne({ adminId }).lean(),
+        isTenantFeatureEnabled(adminId, 'geofenceAutoPunchOut'),
     ]);
 
     if (!user) return { decision: 'suppressed', reason: 'not_punched_in' };
@@ -252,7 +254,12 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
     // without first blindly flipping `enabled` to true -- exactly the leap of
     // faith shadow mode exists to avoid. Evaluation must never be gated on
     // the same flag that gates the act; only the act may be.
-    const armed = force || (cfg.enabled === true && cfg.shadowMode === false);
+    //
+    // The super admin's per-tenant feature switch sits above all of that: when
+    // it is off, nothing -- not the tenant's own config, not `force` -- may arm
+    // the engine. It drops to shadow rather than returning early, for the same
+    // reason as above: only the act is gated, never the evaluation.
+    const armed = featureAllowed && (force || (cfg.enabled === true && cfg.shadowMode === false));
     const shadow = !armed;
 
     // Field staff are exempt: their job IS being away from the branch, and

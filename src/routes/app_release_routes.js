@@ -5,7 +5,7 @@ const multer = require('multer');
 const router = express.Router();
 const {
     checkForUpdate, listReleases, updateRelease,
-    getApkRelease, publishApk, listApks, updateApk,
+    getApkRelease, publishApk, listApks, updateApk, getFleet
 } = require('../controllers/app_release_controller');
 const { protect } = require('../middleware/auth.middleware');
 
@@ -57,8 +57,13 @@ const upload = multer({
 
 // Operator views. Super-admin only in practice; `protect` is the floor so a
 // release list is not public.
-router.get('/releases', protect, listReleases);
-router.put('/releases/:id', protect, updateRelease);
+// Super admin only. These were `protect` alone, so ANY logged-in user -- any
+// employee of any company -- could list every OTA release and enable,
+// disable or retarget one: switch updates off platform-wide, or push a pilot
+// bundle to every phone.
+router.get('/releases', protect, superAdminOnly, listReleases);
+router.put('/releases/:id', protect, superAdminOnly, updateRelease);
+router.get('/fleet', protect, superAdminOnly, getFleet); // installed apps seen by the OTA check-in
 
 router.get('/apks', protect, superAdminOnly, listApks);
 router.put('/apks/:id', protect, superAdminOnly, updateApk);

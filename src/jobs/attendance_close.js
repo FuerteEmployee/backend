@@ -31,7 +31,7 @@ const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 const CLOSE_GRACE_MIN = Number(process.env.CLOSE_GRACE_MINUTES) || 0;
 
 /**
- * How many days back to sweep. One means yesterday only.
+ * How many days back to sweep. Never less than two.
  *
  * "Yesterday only" is correct for a job that never misses a night, and this
  * one missed most of them: 488 days were left open because a run that does not
@@ -39,8 +39,13 @@ const CLOSE_GRACE_MIN = Number(process.env.CLOSE_GRACE_MINUTES) || 0;
  * NEXT yesterday and the gap is gone forever. A lookback makes a missed night
  * recoverable instead of fatal. Closing an already-closed day is a no-op, so
  * widening this is safe.
+ *
+ * Two is the floor because of night shifts, not missed runs. A 22:00-06:00
+ * day is still being worked at 04:00, so the run that sweeps it skips it
+ * (below: "never close a shift that has not ended yet"). With a one-day window
+ * the NEXT run only looks at the day after, and that night was never closed.
  */
-const CLOSE_LOOKBACK_DAYS = Math.max(1, Number(process.env.CLOSE_LOOKBACK_DAYS) || 1);
+const CLOSE_LOOKBACK_DAYS = Math.max(2, Number(process.env.CLOSE_LOOKBACK_DAYS) || 2);
 
 /**
  * Resolve "HH:mm" against a given day, plus the grace period.
@@ -76,8 +81,11 @@ function occurrenceEnd(shift, refDate) {
  * @param {Object} [opts]
  * @param {Date}   [opts.now]     Evaluation instant (tests pass a fixed one).
  * @param {boolean}[opts.dryRun]  Report what would close, change nothing.
+ * @param {Array}  [opts.employeeIds] Only these employees (the QA full-day
+ *                 suite closes its own test day without touching anyone else's).
+ *                 Omitted = everyone, which is what the scheduler does.
  */
-async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) {
+async function closeForgottenPunches({ now = new Date(), dryRun = false, employeeIds = null } = {}) {
     // Yesterday, in IST. Anything still open from TODAY is someone at work,
     // so the window always ends there. It begins CLOSE_LOOKBACK_DAYS earlier so
     // a night the job did not run is picked up on the next one.
@@ -91,6 +99,7 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) 
         date: { $gte: dayStart, $lte: dayEnd },
         punchIn: { $ne: null },
         $or: [{ punchOut: null }, { 'shifts.punchOut': null }],
+        ...(Array.isArray(employeeIds) && employeeIds.length ? { employeeId: { $in: employeeIds } } : {}),
     });
 
     const result = {
@@ -188,8 +197,14 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) 
 
         // Grade it now that it is closed. Only ever downgrades, same as the
         // manual and geofence paths.
+        //
+        // A half-day verdict outranks 'late', as it does on the device path
+        // (punch_reconcile). Payroll pays 'late' as a full day, so a late
+        // arrival who forgot to punch out kept full pay on short hours. The
+        // lateness itself survives in wasLate, the flag payroll reads.
         const grade = gradeDay(attendance, user.shiftId, settings);
-        if (grade === 'half-day' && attendance.status === 'present') attendance.status = 'half-day';
+        if (attendance.status === 'late') attendance.wasLate = true;
+        if (grade === 'half-day' && (attendance.status === 'present' || attendance.status === 'late')) attendance.status = 'half-day';
         if (grade === 'absent') attendance.status = 'absent';
 
         // A day this job closed that still measures as nothing is OUR failure

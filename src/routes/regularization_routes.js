@@ -26,7 +26,9 @@ const reviewersOnly = (req, res, next) => {
     return res.status(403).json({ message: 'Access denied: only an admin can review correction requests.' });
 };
 
-router.get('/', getRegularizations);
+// Employees pass checkPermission untouched and the controller scopes them to
+// their own requests; a sub-admin needs attendance.view to read the queue.
+router.get('/', checkPermission('attendance', 'view'), getRegularizations);
 // No reviewersOnly here: employees submitting their own request is the point.
 // submitRegularization takes employeeId from the token, never the body.
 router.post('/', checkPermission('attendance', 'create'), submitRegularization);

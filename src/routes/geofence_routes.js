@@ -6,10 +6,13 @@ const {
     updateAutoPunchOutMode,
     revertAutoPunchOut,
 } = require('../controllers/geofence_controller');
-const { protect, checkPermission } = require('../middleware/auth.middleware');
+const { protect, panelOnly, checkPermission } = require('../middleware/auth.middleware');
 const { checkSubscription } = require('../middleware/subscription.middleware');
 
 router.use(protect);
+// panelOnly: checkPermission restricts sub-admins only and lets employees
+// straight through, so without it an employee's token could do all of this.
+router.use(panelOnly);
 router.use(checkSubscription);
 
 // The audit trail, including every abstention. Gated on the same permission key

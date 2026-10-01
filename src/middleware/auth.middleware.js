@@ -48,14 +48,32 @@ const protect = async (req, res, next) => {
                 return next();
             }
 
-            // If it's an employee, verify the tenant (admin) is active
-            if (user.role === 'employee') {
-                const admin = await User.findById(req.adminId);
-                if (!admin || !admin.isActive) {
-                    return res.status(401).json({ message: 'Not authorized, tenant inactive' });
+            // A panel account switched off on its own (isActive is the flag
+            // for admins and sub-admins).
+            if (user.role !== 'employee' && user.isActive === false) {
+                return res.status(401).json({
+                    code: 'account_inactive',
+                    message: user.inactiveReason?.trim() || 'Your account is switched off. Please contact your admin.',
+                    name: user.name
+                });
+            }
+
+            // Employees AND sub-admins belong to a company that can be switched
+            // off. Sub-admins used to skip this (only their own flag was read),
+            // so a switched-off company's sub-admins kept full panel access.
+            // The tenant is read from the user's own record, not the token.
+            if (user.role === 'employee' || user.role === 'subadmin') {
+                const admin = user.adminId
+                    ? await User.findOne({ _id: user.adminId, role: 'admin' }).select('isActive status').lean()
+                    : null;
+                if (!admin || admin.isActive === false || admin.status === 'inactive') {
+                    return res.status(401).json({
+                        code: 'company_inactive',
+                        message: user.role === 'employee'
+                            ? "Your company's B.O.T account is switched off. Please tell your admin."
+                            : "Your company's B.O.T account is switched off. Please tell your company owner."
+                    });
                 }
-            } else if (!user.isActive) {
-                return res.status(401).json({ message: 'Not authorized, account inactive' });
             }
 
             return next();
@@ -70,8 +88,11 @@ const protect = async (req, res, next) => {
     }
 };
 
+// The role comes from the database record `protect` loaded, not the token: a
+// JWT lives 30 days, so a demoted admin's token still said "admin".
 const adminOnly = (req, res, next) => {
-    if (req.user && (req.user.role === 'admin' || req.user.role === 'superadmin')) {
+    const role = req.currentUser?.role;
+    if (role === 'admin' || role === 'superadmin') {
         next();
     } else {
         res.status(403).json({ message: 'Access denied: Admin only' });
@@ -90,6 +111,18 @@ const checkPermission = (page, action) => (req, res, next) => {
     return res.status(403).json({ message: `Access denied: no ${action} permission for ${page}` });
 };
 
+// Panel roles only (admin, superadmin, subadmin) — employees are refused.
+//
+// checkPermission alone is NOT this: it restricts sub-admins and waves every
+// other role through, employees included, so a route guarded only by it is
+// open to any employee's token. Put this in front of any route the employee
+// app has no business calling.
+const panelOnly = (req, res, next) => {
+    const role = req.currentUser?.role || req.user?.role;
+    if (role === 'admin' || role === 'superadmin' || role === 'subadmin') return next();
+    return res.status(403).json({ message: 'Access denied: Admin only' });
+};
+
 const superAdminOnly = (req, res, next) => {
     if (req.user && req.user.role === 'superadmin') {
         next();
@@ -98,5 +131,5 @@ const superAdminOnly = (req, res, next) => {
     }
 };
 
-module.exports = { protect, adminOnly, superAdminOnly, checkPermission };
+module.exports = { protect, adminOnly, panelOnly, superAdminOnly, checkPermission };
 

@@ -19,14 +19,14 @@ async function seed() {
       { key: "expenses", label: "Expense management", type: "boolean", order: 9 },
       { key: "noticeBoard", label: "Notice board", type: "boolean", order: 10 },
       { key: "leads", label: "Lead management", type: "boolean", order: 11 },
-      { key: "geminiAI", label: "Gemini AI features", type: "boolean", order: 12 },
-      { key: "analytics", label: "Advanced analytics", type: "select", options: ["none", "basic", "full", "custom"], order: 13 },
-      { key: "firebaseNotifications", label: "Firebase push notifs", type: "boolean", order: 14 },
-      { key: "apiAccess", label: "API access", type: "select", options: ["none", "read-only", "full"], order: 15 },
-      { key: "whatsappAlerts", label: "WhatsApp alerts", type: "boolean", order: 16 },
-      { key: "customBranding", label: "Custom branding", type: "boolean", order: 17 },
-      { key: "prioritySupport", label: "Dedicated support", type: "boolean", order: 18 }
+      { key: "customBranding", label: "Custom branding", type: "boolean", order: 12 },
+      { key: "prioritySupport", label: "Dedicated support", type: "boolean", order: 13 }
     ];
+    // Deliberately absent: geminiAI, analytics, firebaseNotifications,
+    // apiAccess, whatsappAlerts. None has any code behind it (no AI calls, no
+    // tenant analytics, no push/WhatsApp provider, no tenant API keys), so
+    // listing them sold plans on features that do not exist. The deactivate
+    // step below hides them; re-add a row here only once the feature ships.
 
     // Deactivate old features not in the new list to keep database clean
     const activeKeys = defaultFeatures.map(f => f.key);

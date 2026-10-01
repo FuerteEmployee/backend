@@ -130,6 +130,13 @@ const MIN_CONFIRMATION_SPAN_MS = Number(process.env.GEOFENCE_MIN_CONFIRMATION_SP
 const GEOFENCE_UNAMBIGUOUS_FACTOR = Number(process.env.GEOFENCE_UNAMBIGUOUS_FACTOR) || 3;
 
 /**
+ * Fastest believable movement between two consecutive deciding fixes (m/s).
+ * 60 m/s is 216 km/h: faster than anyone commutes, slower than a GPS jump
+ * (the 2026-10-01 phantom went 26 m -> 9.4 km in about a minute, ~150 m/s).
+ */
+const MAX_PLAUSIBLE_SPEED_MPS = Number(process.env.GEOFENCE_MAX_SPEED_MPS) || 60;
+
+/**
  * An exit-in-progress that has gone quiet is no longer an exit-in-progress.
  *
  * Confirmation rounds must be CONTINUOUS. Without a staleness bound, a pending
@@ -164,7 +171,14 @@ function isFieldRole(user) {
     // contradict a decision the admin has already made.
     if (user.attendanceExceptions?.overrideGlobal && user.attendanceExceptions?.remotePunch) return true;
 
-    // Department name as a convenience only. NOTE: `designation` and `jobTitle`
+    // The department's own switch, once an admin has set it. It overrides the
+    // name match below in both directions: renaming "Sales" used to remove the
+    // exemption silently, and "Office" could never be marked field staff.
+    const deptFlag = user.departmentId?.isFieldStaff;
+    if (deptFlag === true) return true;
+    if (deptFlag === false) return false;
+
+    // Department name as a fallback for departments not set yet. NOTE: `designation` and `jobTitle`
     // were consulted here and DO NOT EXIST on the User schema -- Mongoose strict
     // mode drops them, so those reads were always undefined and this function
     // exempted nobody. Only fields that genuinely exist may be read.
@@ -497,6 +511,47 @@ function evaluateExit({ fixes, branches, fallbackRadius = 3000, now, punchInAt, 
         }
     }
 
+    // ── Does the deciding evidence agree with itself? ────────────────────────
+    //
+    // A real departure is a person moving away: the newest fixes are all
+    // outside, and each follows from the one before at a speed a person can
+    // travel. A phone whose location is JUMPING produces something else, and
+    // on 2026-10-01 it punched an employee out at his desk (OPPO CPH2495): his
+    // readings alternated between 26-33 m from the branch and 814 m / 939 m /
+    // 9.4 km, a minute apart, every one reporting 8-14 m accuracy -- so the
+    // accuracy gate passed them. Three of the five deciding fixes were the far
+    // ones, the medoid landed on one of them, 814 m cleared the 3x
+    // "unambiguous" bar, and a single round closed his day.
+    //
+    // Two checks, both of which abstain (when unsure, stay punched in):
+    //   - any deciding fix INSIDE a fence means the phone also says he is here;
+    //   - two consecutive deciding fixes further apart than anyone can travel
+    //     in the time between them is a jump, not a journey.
+    const insideAny = (f) => fenced.some((b) => {
+        const r = b.radius > 0 ? b.radius : fallbackRadius;
+        return calculateDistance(f.latitude, f.longitude, b.latitude, b.longitude) <= r;
+    });
+    const insideDeciding = deciding.filter(insideAny).length;
+    if (insideDeciding > 0) {
+        return abstain(
+            'mixed_positions',
+            `${insideDeciding} of the ${deciding.length} newest readings are inside the fence while the rest are ` +
+            `${Math.round(nearestDist)}m away — the phone's location is jumping, not the employee.`,
+        );
+    }
+    for (let i = 1; i < deciding.length; i++) {
+        const a = deciding[i - 1], b = deciding[i];
+        const dt = Math.max(1, (new Date(b.timestamp) - new Date(a.timestamp)) / 1000);
+        const metres = calculateDistance(a.latitude, a.longitude, b.latitude, b.longitude);
+        if (metres / dt > MAX_PLAUSIBLE_SPEED_MPS) {
+            return abstain(
+                'implausible_jump',
+                `Two readings ${Math.round(dt)}s apart are ${Math.round(metres)}m apart ` +
+                `(${Math.round((metres / dt) * 3.6)} km/h) — a location jump, not travel.`,
+            );
+        }
+    }
+
     // When was the employee last demonstrably INSIDE? That instant, not now, is
     // when their session should end: "now" credits them for the walk home, and
     // the deciding fix docks them for the whole confirmation window -- the
@@ -547,4 +602,5 @@ module.exports = {
     MIN_CONFIRMATION_SPAN_MS,
     GEOFENCE_UNAMBIGUOUS_FACTOR,
     GEOFENCE_PENDING_STALE_MS,
+    MAX_PLAUSIBLE_SPEED_MPS,
 };

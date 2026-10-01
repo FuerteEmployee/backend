@@ -57,6 +57,9 @@ const TrackerEventSchema = new mongoose.Schema({
             'watchdog_restart', // the process had been killed; WorkManager healed it
             'permission_lost',  // location permission revoked while on duty
             'fg_denied',        // the system refused us a foreground service
+            'start_failed',     // the tracker was asked to start and did not come up.
+                                // The one event an admin most needs; it was missing
+                                // here, so the server silently dropped it (N2).
             'fix_gap',          // a silence far longer than the capture interval
 
             // Sampled state, not a transition.

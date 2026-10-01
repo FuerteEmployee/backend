@@ -31,6 +31,14 @@ const RegularizationSchema = new mongoose.Schema({
     // remark, so "what did we overwrite, and by how much" stays answerable
     // after the fact. Null on a request that never touched the punch-out.
     originalPunchOut: { type: Date, default: null },
+    // Same, for the punch-in. The owner's rule: "10 is kept as reference for
+    // the future as well." Approval used to overwrite the arrival with nothing
+    // left behind; this is what it said before the approved time replaced it.
+    originalPunchIn: { type: Date, default: null },
+    // The employee's "Forgot to punch in / out" ticket this request came from,
+    // if any. Linked both ways (Ticket.regularizationId) so deciding on either
+    // the Tickets page or Attendance -> Corrections updates the other.
+    ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ticket', default: null },
     status: {
         type: String,
         enum: ['pending', 'approved', 'rejected'],

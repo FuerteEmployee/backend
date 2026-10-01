@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Tracking = require('../models/Tracking');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
+const Department = require('../models/Department');
 const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 const { evaluateEmployee, replayEmployee } = require('../utils/geofence_engine');
 const { MAX_FIX_AGE_MS } = require('../utils/geofence_window');
@@ -50,16 +51,98 @@ async function isTrackingAllowed(employeeId) {
     return allowed;
 }
 
+/**
+ * Per-employee budget for the single-fix endpoint.
+ *
+ * The web uploader posts one fix every 15s (20 per 5 minutes) plus the odd
+ * admin ping. Nothing legitimate needs more, while a client stuck in a loop
+ * would otherwise write until the disk filled. Same shape and window as the
+ * client-telemetry budget. Over budget answers 202, not an error: the web
+ * uploader ignores the reply, and an error would only invite a retry.
+ *
+ * Deliberately NOT applied to /update/batch. The native syncer drops a batch
+ * on any 4xx and only keeps it on a 5xx, so throttling there would either lose
+ * a phone's offline backlog or make it hammer the server with retries. The
+ * batch path is already bounded by MAX_BATCH and made idempotent by the
+ * unique index.
+ */
+const SINGLE_BUDGET = 30;
+const SINGLE_WINDOW_MS = 5 * 60 * 1000;
+const singleBudget = new Map(); // employeeId -> [timestamps]
+
+function overSingleBudget(employeeId) {
+    const key = String(employeeId);
+    const now = Date.now();
+    const recent = (singleBudget.get(key) || []).filter((t) => now - t < SINGLE_WINDOW_MS);
+    if (recent.length >= SINGLE_BUDGET) {
+        singleBudget.set(key, recent);
+        return true;
+    }
+    recent.push(now);
+    singleBudget.set(key, recent);
+    if (singleBudget.size > 5000) {
+        for (const [k, list] of singleBudget) {
+            if (!list.length || now - list[list.length - 1] >= SINGLE_WINDOW_MS) singleBudget.delete(k);
+        }
+    }
+    return false;
+}
+
+/** A coordinate pair we can store, or null. Strings from older clients are accepted. */
+function readCoords(lat, lng) {
+    if (lat === null || lat === undefined || lat === '' || lng === null || lng === undefined || lng === '') return null;
+    const la = Number(lat);
+    const lo = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+    if (la < -90 || la > 90 || lo < -180 || lo > 180) return null;
+    // 0,0 is in the Atlantic: it is what a device sends before it has any fix.
+    if (la === 0 && lo === 0) return null;
+    return { latitude: la, longitude: lo };
+}
+
+const isId = (v) => typeof v === 'string' && mongoose.Types.ObjectId.isValid(v) && /^[a-f0-9]{24}$/i.test(v);
+
+/**
+ * The employee an admin view asks about, scoped to this company.
+ * Returns the user, or sends the refusal and returns null.
+ */
+async function tenantEmployee(req, res, employeeId, select = '_id name') {
+    if (!employeeId) {
+        res.status(400).json({ message: 'Choose an employee first.' });
+        return null;
+    }
+    if (!isId(String(employeeId))) {
+        res.status(404).json({ message: 'Employee not found.' });
+        return null;
+    }
+    const emp = await User.findOne({ _id: employeeId, adminId: req.adminId, role: 'employee' }).select(select).lean();
+    if (!emp) {
+        res.status(404).json({ message: 'Employee not found.' });
+        return null;
+    }
+    return emp;
+}
+
 exports.updateLocation = async (req, res) => {
     try {
         const employeeId = req.userId;
-        const { latitude, longitude, accuracy } = req.body;
+        const { accuracy } = req.body || {};
 
         // 202, not 403: a client that treats a refusal as an error retries it,
         // which is exactly the loop this is meant to end. `tracking: false`
         // tells the app to stop, the same answer /tracking/ping-check gives.
         if (!(await isTrackingAllowed(employeeId))) {
             return res.status(202).json({ stored: false, tracking: false });
+        }
+
+        // Both spellings, as on the batch path: the web uploader sends both.
+        const coords = readCoords(req.body?.latitude ?? req.body?.lat, req.body?.longitude ?? req.body?.lng);
+        if (!coords) {
+            return res.status(400).json({ message: 'The location is missing or not a real position.' });
+        }
+
+        if (overSingleBudget(employeeId)) {
+            return res.status(202).json({ stored: false, throttled: true });
         }
 
         // The client has always sent `accuracy`; it was discarded because the
@@ -95,11 +178,21 @@ exports.updateLocation = async (req, res) => {
         const speedN = Number(req.body.speed);
         const battN = Number(req.body.batteryLevel);
 
-        const tracking = await Tracking.create({
+        // Same instant already held: a resend. Checked here as well as by the
+        // unique index, because the index in the database is partial (it only
+        // applies when sessionId is set) -- see updateLocationBatch.
+        if (rawAt && captured !== now
+            && await Tracking.exists({ adminId: req.adminId, employeeId, timestamp: captured })) {
+            return res.status(200).json({ stored: false, duplicate: true });
+        }
+
+        let tracking;
+        try {
+            tracking = await Tracking.create({
             adminId: req.adminId,
             employeeId,
-            latitude,
-            longitude,
+            latitude: coords.latitude,
+            longitude: coords.longitude,
             accuracy: accuracyM,
             timestamp: captured,
             receivedAt: now,
@@ -111,7 +204,14 @@ exports.updateLocation = async (req, res) => {
             activityConfidence: Number.isFinite(Number(req.body.activityConfidence))
                 ? Math.max(0, Math.min(100, Number(req.body.activityConfidence)))
                 : null,
-        });
+            });
+        } catch (err) {
+            // Same capture instant sent twice (a retry, or the uploader
+            // re-sending a fix it already sent). The point is stored, so this
+            // is a success for the client, exactly as on the batch path.
+            if (err?.code === 11000) return res.status(200).json({ stored: false, duplicate: true });
+            throw err;
+        }
         res.status(201).json(tracking);
 
         // Fire-and-forget, same as the batch endpoint. Without this, auto
@@ -121,7 +221,8 @@ exports.updateLocation = async (req, res) => {
         evaluateEmployee({ adminId: req.adminId, employeeId })
             .catch((e) => console.error('[tracking] geofence evaluation failed:', e.message));
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        console.error('[tracking] update failed:', error.message);
+        res.status(500).json({ message: 'Could not save the location.' });
     }
 };
 
@@ -154,8 +255,29 @@ exports.updateLocationBatch = async (req, res) => {
 
         // Same consent gate as the single-fix endpoint. This is the path the
         // native tracker uses, so without it the toggle stops nothing at all.
+        //
+        // HOW THE PHONE READS THIS REPLY (LocationSyncer.kt, in every APK in
+        // the field): it deletes its queued rows only when
+        // `accepted + duplicates >= batch size`, and otherwise keeps the batch
+        // and stops syncing. It always resends the OLDEST rows first, so a
+        // batch that is never fully acknowledged is resent forever and every
+        // later fix queues up behind it until the 5000-row cap throws the
+        // oldest away. `duplicates` therefore has to cover every point the
+        // server has finished with -- stored earlier, or refused for good --
+        // not only true duplicates. `alreadyStored` and `rejected` keep the
+        // two apart for anyone reading the reply.
+        //
+        // Points collected while tracking was off are refused for good: they
+        // must not be stored, and they must not upload later either, when the
+        // switch is turned back on.
         if (!(await isTrackingAllowed(employeeId))) {
-            return res.json({ accepted: 0, duplicates: 0, rejected: points.length, tracking: false });
+            return res.json({
+                accepted: 0,
+                duplicates: points.length,
+                alreadyStored: 0,
+                rejected: points.length,
+                tracking: false,
+            });
         }
 
         // Bounded so a malfunctioning client cannot post an unbounded array.
@@ -216,9 +338,33 @@ exports.updateLocationBatch = async (req, res) => {
         let accepted = 0;
         let duplicates = 0;
 
+        // Drop points we already hold BEFORE inserting, rather than trusting
+        // the unique index alone. The index that exists in the database is not
+        // the one the schema declares: it is partial, applying only when
+        // `sessionId` is a string, and the phone sends sessionId as null most
+        // of the time. So a resent batch (a lost acknowledgement) was stored a
+        // second time -- 113 duplicated (employee, instant) pairs were found
+        // on 2026-09-29. Checking here makes the upload idempotent whatever
+        // shape the index has; the index still settles a race between two
+        // simultaneous uploads when it applies.
+        const toInsert = [];
         if (docs.length) {
+            const seen = new Set();
+            const stamps = docs.map((d) => d.timestamp);
+            const held = await Tracking.find({ adminId: req.adminId, employeeId, timestamp: { $in: stamps } })
+                .select('timestamp').lean();
+            for (const h of held) seen.add(new Date(h.timestamp).getTime());
+            for (const d of docs) {
+                const t = d.timestamp.getTime();
+                if (seen.has(t)) { duplicates++; continue; }
+                seen.add(t);
+                toInsert.push(d);
+            }
+        }
+
+        if (toInsert.length) {
             try {
-                const inserted = await Tracking.insertMany(docs, { ordered: false });
+                const inserted = await Tracking.insertMany(toInsert, { ordered: false });
                 accepted = inserted.length;
             } catch (err) {
                 // ordered:false keeps going past duplicates; the error carries
@@ -226,7 +372,7 @@ exports.updateLocationBatch = async (req, res) => {
                 // point of view -- the point is stored -- so it must be
                 // acknowledged, or the syncer retries it forever.
                 accepted = err?.result?.nInserted ?? err?.insertedDocs?.length ?? 0;
-                duplicates = docs.length - accepted;
+                duplicates += toInsert.length - accepted;
                 const dupOnly = (err?.writeErrors || []).every((e) => e?.err?.code === 11000 || e?.code === 11000);
                 if (!dupOnly && !err?.writeErrors?.length) throw err;
             }
@@ -235,7 +381,17 @@ exports.updateLocationBatch = async (req, res) => {
         // Acknowledge FIRST, then decide. The employee's phone is waiting on
         // this response to clear its queue, and a slow geofence evaluation must
         // not hold that open or make a working upload look like a failure.
-        res.json({ accepted, duplicates, rejected: rejected + (slice.length - docs.length - rejected) });
+        //
+        // `duplicates` includes the refused points (see the note on the
+        // consent gate above): they are final, and leaving them unacknowledged
+        // jams the phone's queue behind them. Points past MAX_BATCH were not
+        // looked at, so they are NOT acknowledged and the phone sends them again.
+        res.json({
+            accepted,
+            duplicates: duplicates + rejected,
+            alreadyStored: duplicates,
+            rejected,
+        });
 
         // Fire-and-forget: a decision failure must never surface as an upload error.
         if (accepted > 0) {
@@ -266,7 +422,12 @@ exports.updateLocationBatch = async (req, res) => {
             work.catch((e) => console.error('[tracking] geofence evaluation failed:', e.message));
         }
     } catch (error) {
-        res.status(400).json({ message: error.message });
+        // 500, not 400: the native syncer DROPS a batch on any 4xx and keeps
+        // it on a 5xx. Anything reaching here is a failure on our side (the
+        // database was unreachable, a write threw), so the phone must keep its
+        // backlog and send it again rather than lose it.
+        console.error('[tracking] batch upload failed:', error.message);
+        if (!res.headersSent) res.status(500).json({ message: 'Could not save the locations. They will be sent again.' });
     }
 };
 
@@ -312,7 +473,8 @@ exports.getLatestLocations = async (req, res) => {
             };
         }));
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[tracking]', error.message);
+        res.status(500).json({ message: 'Could not load tracking data. Try again.' });
     }
 };
 
@@ -332,16 +494,21 @@ function distanceKm(a, b) {
 exports.getHistory = async (req, res) => {
     try {
         const { employeeId, date } = req.query;
-        if (!employeeId) {
-            return res.status(400).json({ message: 'employeeId is required' });
+        const emp = await tenantEmployee(req, res, employeeId);
+        if (!emp) return;
+        // A calendar day in IST. Parsed at IST noon so the host's own timezone
+        // can never move it to the neighbouring day.
+        if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+            return res.status(400).json({ message: 'Choose a valid date.' });
         }
-        const day = date ? new Date(date) : new Date();
+        const day = date ? new Date(`${date}T12:00:00+05:30`) : new Date();
+        if (Number.isNaN(day.getTime())) return res.status(400).json({ message: 'Choose a valid date.' });
         const dayStart = istStartOfDay(day);
         const dayEnd = istEndOfDay(day);
 
         const points = await Tracking.find({
             adminId: req.adminId,
-            employeeId,
+            employeeId: emp._id,
             timestamp: { $gte: dayStart, $lte: dayEnd }
         }).sort({ timestamp: 1 }).lean();
 
@@ -366,7 +533,8 @@ exports.getHistory = async (req, res) => {
             rawPoints: points,
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[tracking]', error.message);
+        res.status(500).json({ message: 'Could not load tracking data. Try again.' });
     }
 };
 
@@ -390,21 +558,20 @@ const HELD_FIX_MIN_LAG_MS = 2 * 60 * 1000;
 exports.getHeldFixes = async (req, res) => {
     try {
         const { employeeId, from, to } = req.query;
-        if (!employeeId) {
-            return res.status(400).json({ message: 'employeeId is required' });
-        }
+        const emp = await tenantEmployee(req, res, employeeId);
+        if (!emp) return;
 
         const start = from ? new Date(from) : istStartOfDay(new Date());
         const end = to ? new Date(to) : istEndOfDay(new Date());
         if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-            return res.status(400).json({ message: 'from/to must be valid dates' });
+            return res.status(400).json({ message: 'Choose a valid time range.' });
         }
 
         const rows = await Tracking.aggregate([
             {
                 $match: {
                     adminId: new mongoose.Types.ObjectId(req.adminId),
-                    employeeId: new mongoose.Types.ObjectId(employeeId),
+                    employeeId: emp._id,
                     timestamp: { $gte: start, $lte: end },
                     receivedAt: { $ne: null },
                 },
@@ -420,7 +587,8 @@ exports.getHeldFixes = async (req, res) => {
 
         res.json({ fixes: rows, minLagMs: HELD_FIX_MIN_LAG_MS });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[tracking]', error.message);
+        res.status(500).json({ message: 'Could not load tracking data. Try again.' });
     }
 };
 
@@ -432,13 +600,27 @@ exports.getStats = async (req, res) => {
         const dayEnd = istEndOfDay();
         const liveSince = new Date(Date.now() - LIVE_WINDOW_MS);
 
-        const [fieldStaff, trackingPoints, liveEmployeeIds] = await Promise.all([
-            User.countDocuments({ adminId, role: 'employee', trackingEnabled: true }),
+        // Field staff = everyone whose location the server will actually
+        // accept: their own switch OR their department's, active only. It used
+        // to count the personal switch alone, so a tracked department's people
+        // were missing from the card while their fixes counted as "live".
+        const trackedDepts = await Department.find({ adminId, trackingEnabled: true }).select('_id').lean();
+        const [fieldStaffRows, trackingPoints, liveEmployeeIds] = await Promise.all([
+            User.find({
+                adminId, role: 'employee', status: { $ne: 'inactive' },
+                $or: [{ trackingEnabled: true }, { departmentId: { $in: trackedDepts.map((d) => d._id) } }],
+            }).select('_id').lean(),
             Tracking.countDocuments({ adminId, timestamp: { $gte: dayStart, $lte: dayEnd } }),
             Tracking.distinct('employeeId', { adminId, timestamp: { $gte: liveSince } }),
         ]);
+        const fieldStaff = fieldStaffRows.length;
+        const liveIds = new Set(liveEmployeeIds.map(String));
+        const offlineFieldStaff = fieldStaffRows.filter((u) => !liveIds.has(String(u._id))).length;
 
-        const liveNow = liveEmployeeIds.length;
+        // Live among the TRACKED staff, so Live now + Not reporting = Tracked staff.
+        // It counted anyone with a fix in the last two minutes, including people
+        // no longer tracked, and the three cards did not add up.
+        const liveNow = fieldStaff - offlineFieldStaff;
 
         // "Expected but silent": punched in, tracking is supposed to be on, and
         // yet nothing has arrived for a while.
@@ -471,30 +653,51 @@ exports.getStats = async (req, res) => {
 
         res.json({
             liveNow,
-            offline: Math.max(0, fieldStaff - liveNow),
+            // Field staff who are not reporting right now. Not "fieldStaff -
+            // liveNow": someone live but not field staff made that go negative.
+            offline: offlineFieldStaff,
             trackingPoints,
             fieldStaff,
             expectedButSilent,
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[tracking]', error.message);
+        res.status(500).json({ message: 'Could not load tracking data. Try again.' });
     }
 };
 
 // Admin asks a specific employee's device for a fresh fix right now.
+//
+// All it does is stamp lastPingRequestedAt; the phone notices on its next poll
+// of /tracking/ping-check. So the reply says whether a phone can be expected to
+// answer at all -- tracking off, or not punched in, means it will not.
 exports.requestPing = async (req, res) => {
     try {
-        const employee = await User.findOneAndUpdate(
-            { _id: req.params.employeeId, adminId: req.adminId },
-            { lastPingRequestedAt: new Date() },
-            { new: true }
-        ).select('_id lastPingRequestedAt');
-        if (!employee) {
-            return res.status(404).json({ message: 'Employee not found' });
+        const emp = await tenantEmployee(req, res, req.params.employeeId, '_id name trackingEnabled departmentId');
+        if (!emp) return;
+
+        if (!(await isTrackingAllowed(emp._id))) {
+            return res.status(409).json({
+                message: `Live tracking is off for ${emp.name}, so their phone will not send a location. Turn tracking on first.`,
+                trackingOff: true,
+            });
         }
-        res.json({ pingRequestedAt: employee.lastPingRequestedAt });
+
+        const now = new Date();
+        await User.updateOne({ _id: emp._id, adminId: req.adminId }, { $set: { lastPingRequestedAt: now } });
+
+        const open = await Attendance.exists({
+            adminId: req.adminId,
+            employeeId: emp._id,
+            date: { $gte: new Date(istStartOfDay().getTime() - 24 * 60 * 60 * 1000), $lte: istEndOfDay() },
+            punchIn: { $ne: null },
+            punchOut: null,
+        });
+
+        res.json({ pingRequestedAt: now, punchedIn: !!open });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[tracking] ping failed:', error.message);
+        res.status(500).json({ message: 'Could not send the ping. Try again.' });
     }
 };
 
@@ -502,8 +705,14 @@ exports.requestPing = async (req, res) => {
 exports.checkPing = async (req, res) => {
     try {
         const user = await User.findById(req.userId).select('lastPingRequestedAt');
-        res.json({ pingRequestedAt: user?.lastPingRequestedAt || null });
+        // `tracking` is the same rule the upload endpoints enforce, so a client
+        // that asks can stop instead of posting fixes that will be refused.
+        res.json({
+            pingRequestedAt: user?.lastPingRequestedAt || null,
+            tracking: await isTrackingAllowed(req.userId),
+        });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('[tracking]', error.message);
+        res.status(500).json({ message: 'Could not load tracking data. Try again.' });
     }
 };

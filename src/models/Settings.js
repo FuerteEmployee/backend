@@ -73,6 +73,14 @@ const SettingsSchema = new mongoose.Schema({
         reqMins: { type: Number, default: 0 },
         halfDayHours: { type: Number, default: 4 },
         allowMultiplePunches: { type: Boolean, default: false },
+        // When the phone records an employee's location (only for people whose
+        // tracking is switched on, per employee or per department):
+        //   on_duty -- from punch-in to punch-out (the default, and the only
+        //              behaviour before 2026-09-30);
+        //   always  -- all the time, including after work. Needs APK >= 17: older
+        //              phones fall back to on_duty on their own (the web layer asks
+        //              the native side whether it supports this before using it).
+        trackingMode: { type: String, enum: ['on_duty', 'always'], default: 'on_duty' },
         // Minutes of grace before a punch-in counts as "late". Was read at
         // attendance_controller but previously missing here (Mongoose strict
         // mode silently dropped it) — now declared so it persists.
@@ -250,6 +258,34 @@ const SettingsSchema = new mongoose.Schema({
             unpaidLeave: { type: Number, default: 0, min: 0, max: 1 },
         },
     },
+
+    // Leave policy.
+    leave: {
+        // When the per-type quota (LeaveType.totalDays) starts again.
+        //   'lifetime'       -> never: every leave ever taken counts (the
+        //                       behaviour before this field existed, and the
+        //                       default so no balance moves on deploy)
+        //   'calendar_year'  -> 1 Jan - 31 Dec
+        //   'financial_year' -> 1 Apr - 31 Mar (Indian FY)
+        // Period edges are IST calendar days. No carry-forward: unused days
+        // do not roll into the next period. See utils/leave_balance.js.
+        balancePeriod: {
+            type: String,
+            enum: ['lifetime', 'calendar_year', 'financial_year'],
+            default: 'lifetime',
+        },
+    },
+
+    // What an EMPLOYEE may change about themselves in the app.
+    employeeSelfService: {
+        // Bank details, PAN, Aadhaar (numbers and scans) and legal name.
+        // OFF by default: salary is paid to whatever account is on file, so
+        // letting anyone with a (possibly borrowed) phone change it without HR
+        // is how salary gets diverted. Enforced in user_controller.updateProfile;
+        // admin edits through the employee form are not affected.
+        allowSensitiveEdits: { type: Boolean, default: false },
+    },
+
     leadFields: [{
         key: { type: String, required: true },
         label: { type: String, required: true },

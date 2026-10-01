@@ -8,11 +8,14 @@ const {
     markPunch,
     recordUnresolved,
     isDuplicateLog,
+    forgetLog,
 } = require('../utils/device_registry');
 const PunchLog = require('../models/PunchLog');
 const punchSequence = require('../utils/punch_sequence');
 const punchReconcile = require('../utils/punch_reconcile');
 const { istStartOfDay, istDateKey, parseDeviceTimestamp } = require('../utils/attendance_helpers');
+const { findWorkingDay, workDayKey, lateOutDayStart } = require('../utils/working_day');
+const { withEmployeeLock } = require('../utils/employee_lock');
 const Device = require('../models/Device');
 const { recordClockSkew, resolveClockCorrection } = require('../utils/device_clock');
 const { sendDeviceClockAlert } = require('../jobs/notify');
@@ -42,9 +45,13 @@ const HANDLERS = {
 //
 // Returns { action, reason }. A null action means "don't record this tap".
 async function resolveAction(adminId, employeeId, seqConfig) {
-    const today = istStartOfDay();
-    const existing = await Attendance.findOne({ adminId, employeeId, date: today })
-        .select('punchIn punchOut lunchInTime lunchOutTime');
+    // The working day, so a night worker's 02:00 tap continues last night's
+    // sequence instead of starting a new day with a punch-in.
+    const me = await User.findById(employeeId).select('shiftId').populate('shiftId').lean();
+    const { row: existing } = await findWorkingDay({
+        Attendance, adminId, employeeId, shift: me?.shiftId,
+        select: 'date punchIn punchOut lunchInTime lunchOutTime shifts punchOutIsProvisional',
+    });
 
     const legacyToggle = () =>
         (!existing || existing.punchOut) ? 'punch-in' : 'punch-out';
@@ -130,8 +137,22 @@ async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime
         : rawParsed;
 
     const tapTime = parsed || now;
-    const dayKey = istDateKey(tapTime);
     const employeeId = employee._id;
+
+    // Which day the tap is filed under: the day its shift occurrence STARTED
+    // (see utils/working_day.js). Grouping by calendar day split a night
+    // worker's 22:00 and 06:00 taps into two days, each a lone punch-in. A tap
+    // shortly after a night shift ends still belongs to that night, if that
+    // night has taps at all.
+    const me = await User.findById(employeeId).select('shiftId').populate('shiftId').lean();
+    let dayKey = workDayKey(me?.shiftId, tapTime);
+    const lateOut = lateOutDayStart(me?.shiftId, tapTime);
+    if (lateOut) {
+        const nightKey = istDateKey(lateOut);
+        if (await PunchLog.exists({ adminId, employeeId, dayKey: nightKey, discarded: { $ne: true } })) {
+            dayKey = nightKey;
+        }
+    }
 
     if (!rawParsed) {
         console.warn(
@@ -346,9 +367,11 @@ exports.pushData = async (req, res) => {
             // every tap so far. Only a tenant that has explicitly configured a
             // punch sequence falls through to the incremental logic below.
             if (!seqConfig.enabled) {
-                const outcome = await recordTapAndReconcile({
+                // One person's taps one at a time: the debounce check, the tap store and the
+                // day rebuild read then write, and two taps together both created the day.
+                const outcome = await withEmployeeLock(`punch:${employee._id}`, () => recordTapAndReconcile({
                     adminId, employee, sn, pin, rawDeviceTime: deviceTime, settings, device,
-                });
+                }));
                 if (outcome.recorded) {
                     processed++;
                     markPunch(sn);
@@ -397,6 +420,9 @@ exports.pushData = async (req, res) => {
             // final and must be acknowledged, or the device would retry them
             // forever. This one should be retried.
             failed++;
+            // Un-mark it, or the re-push this 500 asks for would be skipped
+            // as a duplicate resend and the line lost after all.
+            forgetLog(sn, pin, deviceTime);
             console.error(`[iclock] failed to process line "${line}":`, err.message);
         }
     }

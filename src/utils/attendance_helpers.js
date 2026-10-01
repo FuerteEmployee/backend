@@ -96,6 +96,18 @@ const istCalendarDate = (date = new Date()) => {
 };
 
 /**
+ * First and last IST instant of calendar month `month` (1-12) of `year`, for
+ * querying Attendance `date` fields. `new Date(year, month - 1, 1)` is host
+ * midnight: on a UTC server that is 05:30 IST on the 1st, so the 1st's own
+ * IST-midnight row falls outside the range and the day reads as absent.
+ */
+const istMonthRange = (year, month) => {
+  const start = new Date(Date.UTC(year, month - 1, 1) - IST_OFFSET_MS);
+  const end = new Date(Date.UTC(year, month, 1) - IST_OFFSET_MS - 1);
+  return { start, end };
+};
+
+/**
  * Rounds a punch timestamp to the nearest `intervalMinutes` boundary, per
  * settings.attendance.roundingInterval/roundingDirection — e.g. a 15-minute
  * "nearest" rule turns a 09:07 punch-in into 09:00 before it feeds into the
@@ -495,4 +507,4 @@ const parseDeviceTimestamp = (raw, now = new Date(), offsetMinutes = 0) => {
   return parsed;
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, parseIstWallClock, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, istTimeOnDate, istShiftOccurrence, istMinutesOfDay, istSecondsOfMinute, istHHMM, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };
+module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, parseIstWallClock, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, istMonthRange, istTimeOnDate, istShiftOccurrence, istMinutesOfDay, istSecondsOfMinute, istHHMM, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };
