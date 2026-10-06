@@ -17,7 +17,7 @@ const { istStartOfDay, istDateKey, parseDeviceTimestamp } = require('../utils/at
 const { findWorkingDay, workDayKey, lateOutDayStart } = require('../utils/working_day');
 const { withEmployeeLock } = require('../utils/employee_lock');
 const Device = require('../models/Device');
-const { recordClockSkew, resolveClockCorrection } = require('../utils/device_clock');
+const { recordClockSkew, observeServerOffset, toServerTime } = require('../utils/device_clock');
 const { sendDeviceClockAlert } = require('../jobs/notify');
 
 // Maps a resolved action name to the handler that records it.
@@ -44,12 +44,14 @@ const HANDLERS = {
 //  • Otherwise, the legacy toggle: no open record → punch in, open → punch out.
 //
 // Returns { action, reason }. A null action means "don't record this tap".
-async function resolveAction(adminId, employeeId, seqConfig) {
+// `tapTime` is when the tap happened, so a backlog flushed after midnight is
+// matched against the day it was tapped on, not the day it arrived.
+async function resolveAction(adminId, employeeId, seqConfig, tapTime = new Date()) {
     // The working day, so a night worker's 02:00 tap continues last night's
     // sequence instead of starting a new day with a punch-in.
     const me = await User.findById(employeeId).select('shiftId').populate('shiftId').lean();
     const { row: existing } = await findWorkingDay({
-        Attendance, adminId, employeeId, shift: me?.shiftId,
+        Attendance, adminId, employeeId, shift: me?.shiftId, now: tapTime,
         select: 'date punchIn punchOut lunchInTime lunchOutTime shifts punchOutIsProvisional',
     });
 
@@ -118,25 +120,73 @@ async function checkDeviceClock(device, tapTime) {
  *  - unparseable device clock — falls back to receive time, which is the old
  *    behaviour and still better than discarding the punch entirely.
  */
-async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings, device }) {
-    // A terminal configured to the wrong timezone reports a perfectly
-    // plausible timestamp that is a whole offset out. The correction is either
-    // one somebody set by hand, or one measured from this device's own recent
-    // samples -- see utils/device_clock.js resolveClockCorrection.
+/**
+ * When this tap happened, on the SERVER's clock -- never the terminal's.
+ *
+ * The terminal's timestamp is converted with its learned offset (see
+ * utils/device_clock.js): a tap that arrives at once lands at its arrival time,
+ * and one the terminal held back while the network was down lands at the
+ * server time it was actually made (tapped 10:45, delivered 11:12 -> 10:45).
+ * pushData must have folded the batch into the offset first (learnBatchOffset).
+ *
+ * Used by both paths -- day reconciliation and the punch sequence -- so the two
+ * cannot disagree about when a tap happened.
+ */
+function resolveTapTime({ sn, pin, rawDeviceTime, device }) {
     const now = new Date();
-
-    // Parse ONCE uncorrected, purely to measure. Measuring skew against the
-    // already-corrected value would read ~0, which would erase the very
-    // evidence the correction is derived from and make it oscillate on and off
-    // between taps. The raw reading is the only honest input to the detector.
     const rawParsed = parseDeviceTimestamp(rawDeviceTime, now, 0);
 
-    const correction = resolveClockCorrection(device);
-    const parsed = correction.minutes
-        ? parseDeviceTimestamp(rawDeviceTime, now, correction.minutes)
-        : rawParsed;
+    if (!rawParsed) {
+        console.warn(
+            `[iclock] SN=${sn} PIN=${pin} sent an unusable timestamp ("${rawDeviceTime}") — ` +
+            'using the time it arrived.'
+        );
+        return now;
+    }
 
-    const tapTime = parsed || now;
+    const tapTime = device ? toServerTime(device, rawParsed) : rawParsed;
+    if (device) {
+        // Logged when it moves a tap by more than a minute: a punch time that
+        // does not match what the terminal displayed must be explainable from
+        // the logs, or nobody can tell a conversion from a bug.
+        if (Math.abs(tapTime - rawParsed) > 60 * 1000) {
+            console.log(
+                `[iclock] SN=${sn} PIN=${pin} terminal time ${rawDeviceTime} -> server time ${tapTime.toISOString()}`
+            );
+        }
+        checkDeviceClock(device, rawParsed).catch((err) =>
+            console.error('[iclock] clock check failed:', err.message));
+    }
+    return tapTime;
+}
+
+/**
+ * Fold a whole ATTLOG batch into the terminal's clock offset BEFORE any of it
+ * is converted, newest tap first. An offline backlog usually ends with a tap
+ * made after the network returned; that one anchors the older lines. Fed
+ * oldest-first, the oldest line would set the offset and be stored late.
+ */
+function learnBatchOffset(device, lines) {
+    if (!device) return;
+    const now = new Date();
+    const taps = lines
+        .map((line) => parseDeviceTimestamp(line.split('\t')[1], now, 0))
+        .filter(Boolean)
+        .sort((a, b) => b - a);
+    let changed = false;
+    for (const t of taps) changed = observeServerOffset(device, t, now) || changed;
+    if (!changed) return;
+    Device.updateOne({ _id: device._id }, {
+        $set: {
+            serverOffsetMs: device.serverOffsetMs,
+            serverOffsetConfirmedAt: device.serverOffsetConfirmedAt,
+            serverOffsetCandidate: device.serverOffsetCandidate || null,
+        },
+    }).catch((err) => console.error('[iclock] could not save clock offset:', err.message));
+}
+
+async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings, device }) {
+    const tapTime = resolveTapTime({ sn, pin, rawDeviceTime, device });
     const employeeId = employee._id;
 
     // Which day the tap is filed under: the day its shift occurrence STARTED
@@ -152,27 +202,6 @@ async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime
         if (await PunchLog.exists({ adminId, employeeId, dayKey: nightKey, discarded: { $ne: true } })) {
             dayKey = nightKey;
         }
-    }
-
-    if (!rawParsed) {
-        console.warn(
-            `[iclock] SN=${sn} PIN=${pin} sent an unusable timestamp ("${rawDeviceTime}") — ` +
-            'falling back to receive time; check the terminal\'s clock.'
-        );
-    } else if (device) {
-        if (correction.minutes) {
-            // Logged on every corrected tap on purpose: a punch time that does
-            // not match what the terminal displayed must be explainable from
-            // the logs, or the next person to look at it has no way to tell a
-            // correction from a bug.
-            console.log(
-                `[iclock] SN=${sn} PIN=${pin} tap ${rawDeviceTime} corrected by ` +
-                `${correction.minutes > 0 ? '+' : ''}${correction.minutes} min (${correction.source}) ` +
-                `-> ${tapTime.toISOString()}`
-            );
-        }
-        checkDeviceClock(device, rawParsed).catch((err) =>
-            console.error('[iclock] clock check failed:', err.message));
     }
 
     const gap = punchReconcile.debounceMs(settings);
@@ -218,17 +247,24 @@ async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime
     };
 }
 
-function callHandler(handler, adminId, employeeId) {
+function callHandler(handler, adminId, employeeId, tapTime) {
     // `deviceSource` distinguishes this channel from the BOTLens camera, which
     // also punches with isDevicePunch. Both used to land as 'lens', so the
     // admin table showed the camera icon for fingerprint-terminal punches and
     // the Attendance model's 'biometric' enum value was never actually written.
+    //
+    // `tapTime` is when the employee tapped (see resolveTapTime). Without it
+    // the handlers stamped the moment the line ARRIVED: a punch-in tapped at
+    // 10:45 with the wifi down and delivered at 11:12 was stored as 11:12 and
+    // graded late. Set only here, never from a request body, so an app punch
+    // cannot choose its own time.
     const req = {
         adminId: String(adminId),
         userId: String(employeeId),
         body: {},
         isDevicePunch: true,
         deviceSource: 'biometric',
+        tapTime,
     };
     return new Promise(resolve => {
         let statusCode = 200;
@@ -251,6 +287,16 @@ exports.handshake = (req, res) => {
     // straight away, before anybody has punched on it.
     resolveDevice(sn).catch(err => console.error('[iclock] handshake device resolve failed:', err.message));
 
+    // TimeZone is how a terminal that syncs to us turns our HTTP `Date` header
+    // (GMT) into its own clock. Per the PUSH protocol -12..12 is hours and a
+    // value beyond ±60 is minutes, so India would be 330.
+    //
+    // Deliberately left at 0. A client may keep a terminal on UTC (a 5h30m gap
+    // on its display) and does not want us resetting it. Its punches are put
+    // on the SERVER's clock on our side instead: resolveTapTime converts every
+    // tap with the terminal's learned offset (utils/device_clock.js), whatever
+    // its clock says. Only a manual "Clock correction" (Super admin > Machines)
+    // would double-count if the terminal's clock were changed under it.
     res.type('text/plain').send(
         `GET OPTION FROM: ${sn}\r\n` +
         `Stamp=9999\r\n` +
@@ -323,6 +369,10 @@ exports.pushData = async (req, res) => {
     let processed = 0;
     let failed = 0;
 
+    // Before converting any line, learn this terminal's clock offset from the
+    // whole batch -- see learnBatchOffset.
+    learnBatchOffset(device, lines);
+
     for (const line of lines) {
         const [pin, deviceTime] = line.split('\t');
         if (!pin || !deviceTime) continue;
@@ -385,7 +435,8 @@ exports.pushData = async (req, res) => {
                 continue;
             }
 
-            const { action, reason } = await resolveAction(adminId, employee._id, seqConfig);
+            const tapTime = resolveTapTime({ sn, pin, rawDeviceTime: deviceTime, device });
+            const { action, reason } = await resolveAction(adminId, employee._id, seqConfig, tapTime);
 
             // Sequence finished for today and the tenant chose to ignore extras.
             // Discarding beats guessing: without this an accidental second tap
@@ -404,12 +455,12 @@ exports.pushData = async (req, res) => {
                 continue;
             }
 
-            const result = await callHandler(handler, adminId, employee._id);
+            const result = await callHandler(handler, adminId, employee._id, tapTime);
 
             if (result.ok) {
                 processed++;
                 markPunch(sn);
-                console.log(`[iclock] ${employee.name} (PIN ${pin}) → ${action} [${reason}]`);
+                console.log(`[iclock] ${employee.name} (PIN ${pin}) → ${action} [${reason}] @ ${tapTime.toISOString()}`);
             } else {
                 console.warn(`[iclock] ${action} rejected for deviceUserId=${pin}: ${result.body?.message}`);
             }

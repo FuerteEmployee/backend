@@ -993,6 +993,119 @@ test('ota: with nothing to compare, behaviour is unchanged (the release is offer
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  Biometric taps are stored on the SERVER's clock, whatever the terminal's says
+// ═════════════════════════════════════════════════════════════════════════════
+
+section('device clock -> server time');
+
+const { observeServerOffset, toServerTime, recordClockSkew } = require('../src/utils/device_clock');
+const { parseDeviceTimestamp } = require('../src/utils/attendance_helpers');
+
+const MIN = 60 * 1000;
+// An instant from an IST wall time on 2026-10-06.
+const clockIst = (hh, mm, ss = 0) => new Date(Date.UTC(2026, 9, 6, hh, mm, ss) - IST_OFFSET_MS);
+// What a terminal whose clock is `behindMin` minutes slow stamps for that instant.
+const terminalStamp = (instant, behindMin) => new Date(instant.getTime() - behindMin * MIN);
+// One ATTLOG batch arriving at `receivedAt`: learn from all of it (newest first,
+// as pushData does), then convert each tap.
+function deliver(device, stamps, receivedAt) {
+    [...stamps].sort((a, b) => b - a).forEach((t) => observeServerOffset(device, t, receivedAt));
+    return stamps.map((t) => toServerTime(device, t));
+}
+
+test('clock: UTC terminal, live tap -- machine shows 10:32, stored 16:02 (the server time)', () => {
+    const device = {};
+    // The terminal's text "10:32" is read as 10:32 IST, which is 5h30m early.
+    const stamp = parseDeviceTimestamp('2026-10-06 10:32:00', clockIst(16, 2, 2), 0);
+    const [stored] = deliver(device, [stamp], clockIst(16, 2, 2));
+    assert.equal(istHHMM(stored), '16:02');
+});
+
+test('clock: UTC terminal, offline tap -- tapped 10:45, delivered 11:12 -- stored 10:45, not late', () => {
+    const device = {};
+    deliver(device, [terminalStamp(clockIst(9, 30), 330)], clockIst(9, 30, 1)); // a live tap earlier
+    const [stored] = deliver(device, [terminalStamp(clockIst(10, 45), 330)], clockIst(11, 12));
+    assert.equal(istHHMM(stored), '10:45');
+});
+
+test('clock: correct-clock terminal, offline tap -- still the time it was made', () => {
+    const device = {};
+    deliver(device, [clockIst(9, 30)], clockIst(9, 30, 1));
+    const [stored] = deliver(device, [clockIst(10, 45)], clockIst(11, 12));
+    assert.equal(istHHMM(stored), '10:45');
+});
+
+test('clock: a 20-tap backlog ending with a live tap keeps every tap at its own time', () => {
+    const device = {};
+    const taps = Array.from({ length: 20 }, (_, i) => terminalStamp(clockIst(9, 50 + Math.floor(i / 2)), 330));
+    taps.push(terminalStamp(clockIst(11, 12), 330)); // tapped just after the wifi came back
+    const stored = deliver(device, taps, clockIst(11, 12, 3));
+    assert.equal(istHHMM(stored[0]), '09:50');
+    assert.equal(istHHMM(stored[19]), '09:59');
+    assert.equal(istHHMM(stored[20]), '11:12');
+});
+
+test('clock: a held-back burst never moves a learned offset (no "slow clock" from a backlog)', () => {
+    const device = {};
+    deliver(device, [clockIst(9, 0)], clockIst(9, 0, 1));
+    const before = device.serverOffsetMs;
+    const burst = Array.from({ length: 20 }, (_, i) => clockIst(9, 50 + Math.floor(i / 2)));
+    const stored = deliver(device, burst, clockIst(11, 12));
+    assert.equal(device.serverOffsetMs, before);
+    assert.equal(istHHMM(stored[0]), '09:50');
+});
+
+test('clock: no tap is ever stored after it arrived', () => {
+    const device = {};
+    const stored = deliver(device, [clockIst(9, 50), clockIst(9, 58)], clockIst(11, 12));
+    for (const s of stored) assert.ok(s.getTime() <= clockIst(11, 12).getTime());
+});
+
+test('clock: a clock put right (330 -> 0) is followed on the very next live tap', () => {
+    const device = {};
+    deliver(device, [terminalStamp(clockIst(9, 0), 330)], clockIst(9, 0));
+    const [stored] = deliver(device, [clockIst(10, 0)], clockIst(10, 0, 1));
+    assert.equal(istHHMM(stored), '10:00');
+    assert.ok(Math.abs(device.serverOffsetMs) < MIN);
+});
+
+test('clock: a clock that fell behind (0 -> 330) is followed once live taps agree over 30 min', () => {
+    const device = {};
+    deliver(device, [clockIst(9, 0)], clockIst(9, 0));
+    deliver(device, [terminalStamp(clockIst(10, 0), 330)], clockIst(10, 0));
+    deliver(device, [terminalStamp(clockIst(10, 15), 330)], clockIst(10, 15));
+    const [stored] = deliver(device, [terminalStamp(clockIst(10, 31), 330)], clockIst(10, 31));
+    assert.equal(istHHMM(stored), '10:31');
+});
+
+test('clock: ...but three agreeing taps arriving together (a backlog) do not move it', () => {
+    const device = {};
+    deliver(device, [clockIst(9, 0)], clockIst(9, 0));
+    const before = device.serverOffsetMs;
+    deliver(device, [clockIst(9, 50), clockIst(9, 50, 30), clockIst(9, 51)], clockIst(11, 12));
+    assert.equal(device.serverOffsetMs, before);
+});
+
+test('clock: an offset nothing has confirmed for 7 days is relearned', () => {
+    const device = {};
+    deliver(device, [terminalStamp(clockIst(9, 0), 330)], clockIst(9, 0));
+    const weekLater = new Date(clockIst(9, 0).getTime() + 8 * 24 * 60 * MIN);
+    observeServerOffset(device, new Date(weekLater.getTime() - 5 * MIN), weekLater);
+    assert.ok(Math.abs(device.serverOffsetMs - 5 * MIN) < 1000);
+});
+
+test('clock: a manual Clock correction still wins over the learned offset', () => {
+    const device = { clockOffsetMinutes: 330, serverOffsetMs: 0 };
+    assert.equal(istHHMM(toServerTime(device, terminalStamp(clockIst(16, 2), 330))), '16:02');
+});
+
+test('clock: recordClockSkew (the clock alert) still records each tap', () => {
+    const device = { clockSkewSamples: [] };
+    recordClockSkew(device, terminalStamp(clockIst(16, 2), 330), clockIst(16, 2));
+    assert.equal(device.clockSkewSamples[0].minutes, 330);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  Per-employee lock: a double tap must not run two read-then-write handlers at once
 // ═════════════════════════════════════════════════════════════════════════════
 

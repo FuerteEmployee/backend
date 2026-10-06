@@ -180,6 +180,24 @@ function tooSoonSince(since, seconds, phrase, now = Date.now()) {
 }
 
 /**
+ * When this punch happened.
+ *
+ * For an app punch, now. For a biometric terminal, the moment of the TAP,
+ * which iclock_controller passes as `req.tapTime`: a terminal with no network
+ * keeps its taps and sends them later, and stamping arrival time stored a
+ * 10:45 punch-in delivered at 11:12 as 11:12 -- late. Everything a handler
+ * decides from the clock (the stored time, which day, late, the minimum gaps)
+ * must use this one value, or the parts disagree about when the punch was.
+ *
+ * `tapTime` is only read on a device punch, and only iclock's synthetic request
+ * sets it -- never a request body -- so an app user cannot choose a time.
+ */
+function punchMoment(req) {
+    const t = req?.isDevicePunch ? req.tapTime : null;
+    return t instanceof Date && !Number.isNaN(t.getTime()) ? t : new Date();
+}
+
+/**
  * The punch-in that opened the segment currently running.
  *
  * Not simply `attendance.punchIn`: sessions live in `attendance.shifts[]` and
@@ -399,7 +417,7 @@ exports.punchIn = async (req, res) => {
             const accuracyError = rejectPoorAccuracy(accuracy);
             if (accuracyError) return res.status(400).json({ message: accuracyError, retryable: true });
         }
-        const now = new Date();
+        const now = punchMoment(req);
 
         // 1. Fetch User, Shift and Settings. The shift comes first because it
         // decides which day this punch is filed under (see working_day.js).
@@ -498,6 +516,7 @@ exports.punchIn = async (req, res) => {
                 attendance.punchOut,
                 minGapSeconds(settings, 'workMinGapSeconds'),
                 { what: 'You punched out', doing: 'punching in again' },
+                now.getTime(),
             );
             if (sinceOutTooSoon) return res.status(400).json(sinceOutTooSoon);
 
@@ -826,7 +845,7 @@ exports.punchOut = async (req, res) => {
         const employeeId = req.userId;
         const { location, photo, address, accuracy, fixAt } = req.body;
 
-        const now = new Date();
+        const now = punchMoment(req);
 
         const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         if (!user) {
@@ -890,6 +909,7 @@ exports.punchOut = async (req, res) => {
             currentPunchIn(attendance),
             minGapSeconds(settings, 'workMinGapSeconds'),
             { what: 'You punched in', doing: 'punching out' },
+            now.getTime(),
         );
         if (sinceInTooSoon) return res.status(400).json(sinceInTooSoon);
 
@@ -900,6 +920,7 @@ exports.punchOut = async (req, res) => {
             attendance.lunchOutTime,
             minGapSeconds(settings, 'workMinGapSeconds'),
             { what: 'Lunch ended', doing: 'punching out' },
+            now.getTime(),
         );
         if (sinceLunchTooSoon) return res.status(400).json(sinceLunchTooSoon);
 
@@ -1045,6 +1066,7 @@ exports.lunchIn = async (req, res) => {
     try {
         const employeeId = req.userId; // never the body: that let a caller start or end a co-worker's lunch
         const { location, address, accuracy } = req.body;
+        const now = punchMoment(req);
 
         const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         const { row: attendance } = await findWorkingDay({
@@ -1052,6 +1074,7 @@ exports.lunchIn = async (req, res) => {
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
             shift: user?.shiftId,
+            now,
         });
 
         if (!attendance) {
@@ -1085,7 +1108,7 @@ exports.lunchIn = async (req, res) => {
         // saved). A repeat within a minute is the same tap, so answer as if it
         // worked; later than that, say when lunch started.
         if (attendance.lunchInTime && !attendance.lunchOutTime) {
-            const ago = Date.now() - new Date(attendance.lunchInTime).getTime();
+            const ago = now.getTime() - new Date(attendance.lunchInTime).getTime();
             if (ago >= 0 && ago < 60 * 1000) return res.json(attendance);
             return res.status(400).json({
                 message: `Lunch already started at ${hhmmIST(attendance.lunchInTime)}. Tap End Lunch when you are back.`,
@@ -1104,6 +1127,7 @@ exports.lunchIn = async (req, res) => {
             currentPunchIn(attendance),
             minGapSeconds(settings, 'workMinGapSeconds'),
             { what: 'You punched in', doing: 'starting lunch' },
+            now.getTime(),
         );
         if (sinceArrivalTooSoon) return res.status(400).json(sinceArrivalTooSoon);
 
@@ -1119,7 +1143,7 @@ exports.lunchIn = async (req, res) => {
             return res.status(400).json({ message: 'Lunch already completed for today' });
         }
 
-        attendance.lunchInTime = applyPunchRounding(new Date(), 'Lunch In', settings);
+        attendance.lunchInTime = applyPunchRounding(now, 'Lunch In', settings);
         attendance.lunchInLocation = address || "Location provided by user";
         attendance.lunchInCoordinates = location || null;
         attendance.lunchInDistance = lunchInDistance;
@@ -1145,6 +1169,7 @@ exports.lunchOut = async (req, res) => {
     try {
         const employeeId = req.userId; // never the body: that let a caller start or end a co-worker's lunch
         const { location, address, accuracy } = req.body;
+        const now = punchMoment(req);
 
         const user = await User.findById(employeeId).populate('shiftId branchId branchIds');
         const { row: attendance } = await findWorkingDay({
@@ -1152,6 +1177,7 @@ exports.lunchOut = async (req, res) => {
             adminId: new mongoose.Types.ObjectId(req.adminId),
             employeeId: new mongoose.Types.ObjectId(employeeId),
             shift: user?.shiftId,
+            now,
         });
 
         if (!attendance) {
@@ -1203,6 +1229,7 @@ exports.lunchOut = async (req, res) => {
             attendance.lunchInTime,
             minGapSeconds(settings, 'lunchMinGapSeconds'),
             { what: 'Lunch started', doing: 'ending it' },
+            now.getTime(),
         );
         if (lunchTooSoon) return res.status(400).json(lunchTooSoon);
 
@@ -1214,7 +1241,7 @@ exports.lunchOut = async (req, res) => {
         if (lunchOutGeo.reject) return res.status(400).json(lunchOutGeo.reject);
         const lunchOutDistance = lunchOutGeo.distance;
 
-        attendance.lunchOutTime = applyPunchRounding(new Date(), 'Lunch Out', settings);
+        attendance.lunchOutTime = applyPunchRounding(now, 'Lunch Out', settings);
         attendance.lunchOutLocation = address || "Location provided by user";
         attendance.lunchOutCoordinates = location || null;
         attendance.lunchOutDistance = lunchOutDistance;
