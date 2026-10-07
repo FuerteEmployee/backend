@@ -19,6 +19,16 @@ const { istCalendarDate, parseIstWallClock, istHHMM } = require('../utils/attend
 const { findWorkingDay } = require('../utils/working_day');
 const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock');
 
+// A punch photo a device may send: a base64 JPEG/PNG/WebP data URL, at most
+// ~3 MB. Anything else from the camera endpoint -- a URL, a path, a huge
+// string -- is ignored rather than handed to Cloudinary.
+const MAX_DEVICE_PHOTO_CHARS = 4 * 1024 * 1024;
+function isImageDataUrl(value) {
+    return typeof value === 'string'
+        && value.length <= MAX_DEVICE_PHOTO_CHARS
+        && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value);
+}
+
 async function uploadToCloudinary(dataUrl, folder = 'attendance') {
     if (!dataUrl) return null;
     try {
@@ -68,7 +78,21 @@ async function uploadToCloudinary(dataUrl, folder = 'attendance') {
  * resolution, not a selfie.
  */
 async function resolvePunchPhoto(req, photo, action) {
-    if (req.isDevicePunch) return { ok: true, url: null };
+    if (req.isDevicePunch) {
+        // The BOTLens face kiosk (deviceSource 'lens') DOES have a camera and
+        // sends the frame it matched the face in. Keep it, so a camera punch
+        // shows a photo on the attendance screen like an app punch does. It is
+        // evidence, not the check -- the face match already identified the
+        // person -- so a missing or failed photo never refuses the punch.
+        // Fingerprint terminals send none and are unaffected.
+        if (req.deviceSource !== 'lens' || !isImageDataUrl(photo)) return { ok: true, url: null };
+        try {
+            return { ok: true, url: await uploadToCloudinary(photo, 'attendance/lens') };
+        } catch (err) {
+            console.error('[lens] punch photo upload failed, punch kept without it:', err.message);
+            return { ok: true, url: null };
+        }
+    }
 
     if (!photo) {
         return {
@@ -624,9 +648,26 @@ exports.punchIn = async (req, res) => {
             source: punchSource(req),
             isWFH: !!isWFH,
             remarks: isWFH ? 'Work From Home' : '',
+            // A fresh day on an EXISTING row (one marked absent, or edited
+            // empty) must not inherit the old punch-out's evidence. Only the
+            // time was reset, so the old punch-out selfie showed beside the new
+            // punch-in photo the moment someone punched in.
             punchOut: null,
+            punchOutPhoto: null,
+            punchOutLocation: null,
+            punchOutCoordinates: null,
+            punchOutDistance: null,
+            punchOutAccuracy: null,
+            punchOutFixAt: null,
+            punchOutIsProvisional: false,
             lunchInTime: null,
+            lunchInLocation: null,
+            lunchInCoordinates: null,
+            lunchInDistance: null,
             lunchOutTime: null,
+            lunchOutLocation: null,
+            lunchOutCoordinates: null,
+            lunchOutDistance: null,
             shifts: [{
                 punchIn: punchInTime,
                 ...sessionEndFields('punchIn', {
@@ -1703,6 +1744,18 @@ exports.markAbsent = async (req, res) => {
         attendance.derivedFields = [];
         attendance.autoPunchOut = false;
         attendance.autoPunchOutReason = null;
+        // ...and the evidence of the punches being undone. The times were
+        // cleared but the selfies, places and distances stayed, so an "Absent"
+        // row on the Attendance page still showed the employee's punch photo.
+        // The raw taps (PunchLog) and the event log are kept as the audit trail.
+        attendance.set({
+            punchInPhoto: null, punchOutPhoto: null,
+            punchInLocation: null, punchOutLocation: null, lunchInLocation: null, lunchOutLocation: null,
+            punchInCoordinates: null, punchOutCoordinates: null, lunchInCoordinates: null, lunchOutCoordinates: null,
+            punchInDistance: null, punchOutDistance: null, lunchInDistance: null, lunchOutDistance: null,
+            punchInAccuracy: null, punchOutAccuracy: null, punchInFixAt: null, punchOutFixAt: null,
+            calculatedDistance: null, geoStatus: null,
+        });
         attendance.remarks = stripGradingRemarks(attendance.remarks);
         if (!String(attendance.remarks || '').includes('Marked absent by admin')) {
             attendance.remarks = (attendance.remarks ? attendance.remarks + ' | ' : '') + 'Marked absent by admin';

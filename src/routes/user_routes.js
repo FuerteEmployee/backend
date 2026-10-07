@@ -32,7 +32,7 @@ router.post('/logout', protect, logout); // Record a logout in the access log + 
 router.get('/profile', protect, getProfile); // Get currently logged-in user details
 router.get('/subscription', protect, getMySubscription); // Get current tenant subscription/trial status (not subscription-gated; employees refused, sub-admins get the banner fields only)
 router.get('/subscription/invoices', protect, adminOnly, getMyInvoices); // The tenant's own invoices for Plan & Billing (not subscription-gated, so a lapsed tenant can still see them)
-// router.post('/verify-add-employee', protect, verifyBotlensCredentials); // Re-confirm admin identity before BOTLens adds an employee (not subscription-gated) — BOTLens integration disabled
+router.post('/verify-add-employee', protect, verifyBotlensCredentials); // Re-confirm admin identity before BOTLens adds an employee (not subscription-gated)
 router.put('/profile', protect, uploadIdDocument.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'panCard', maxCount: 2 },

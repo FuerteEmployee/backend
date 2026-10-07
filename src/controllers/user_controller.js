@@ -280,16 +280,15 @@ const sendRefusal = (res, refusal) => {
     return res.status(status).json(body);
 };
 
-const BOTLENS_OFF = { message: 'BOTLens is currently disabled.' };
+// BOTLens (the camera console) is admin-only -- employees mark attendance via
+// the camera itself, they never need to log in there. Keyed off the `app` flag
+// the BOTLens client sends, so the shared login endpoint stays unrestricted
+// for every other caller.
+const BOTLENS_ADMIN_ONLY = { message: 'Only company admins can access BOTLens. Please contact your administrator.' };
 
 exports.loginRequest = async (req, res) => {
     const { app } = req.body || {};
     try {
-        // BOTLens integration is disabled -- no login is allowed through the
-        // BOTLens client at all, keyed off the `app` flag it sends. Checked
-        // before anything else, so it issues no OTP and reveals nothing.
-        if (app === 'botlens') return res.status(403).json(BOTLENS_OFF);
-
         const phone = normalizeLoginPhone(req.body?.phone);
         if (!phone) {
             return res.status(400).json({ code: 'bad_phone', message: 'Please enter your 10-digit mobile number.' });
@@ -316,6 +315,8 @@ exports.loginRequest = async (req, res) => {
             return res.status(404).json({ code: 'not_registered', message: 'You are not registered. Please contact your admin to register you first.' });
         }
 
+        if (app === 'botlens' && user.role !== 'admin') return res.status(403).json(BOTLENS_ADMIN_ONLY);
+
         const refusal = await loginRefusal(user);
         if (refusal) return sendRefusal(res, refusal);
 
@@ -338,10 +339,6 @@ exports.loginRequest = async (req, res) => {
 exports.verifyOtp = async (req, res) => {
     const { app } = req.body || {};
     try {
-        // BOTLens is disabled: refused whatever the code, so an OTP issued via
-        // another app's login flow can't be replayed against BOTLens.
-        if (app === 'botlens') return res.status(403).json(BOTLENS_OFF);
-
         const phone = normalizeLoginPhone(req.body?.phone);
         if (!phone) {
             return res.status(400).json({ code: 'bad_phone', message: 'Please enter your 10-digit mobile number.' });
@@ -364,6 +361,11 @@ exports.verifyOtp = async (req, res) => {
             ipFailure(ipKey);
             return res.status(400).json({ code: 'otp_expired', message: 'This code has expired. Please ask for a new code.' });
         }
+
+        // Re-checked here (not just at login-request) so an OTP issued via
+        // another app's login flow can't be replayed against BOTLens for a
+        // non-admin phone number.
+        if (app === 'botlens' && user.role !== 'admin') return res.status(403).json(BOTLENS_ADMIN_ONLY);
 
         // Checked before comparing, and synchronously with the bump below, so
         // parallel guesses cannot all slip past the limit.
