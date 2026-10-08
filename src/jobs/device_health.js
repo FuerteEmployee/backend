@@ -1,4 +1,5 @@
 const Device = require('../models/Device');
+const { excludeFrozen } = require('../utils/frozen_tenants');
 const User = require('../models/User');
 const AlertRule = require('../models/AlertRule');
 const { sendDeviceOfflineAlert } = require('./notify');
@@ -55,7 +56,7 @@ async function runDeviceHealthCheck(now = new Date()) {
         // next outage is reported immediately instead of being swallowed by a
         // stale offlineAlertedAt.
         const recovered = await Device.updateMany(
-            { offlineAlertedAt: { $ne: null }, lastSeenAt: { $gt: cutoff } },
+            { offlineAlertedAt: { $ne: null }, lastSeenAt: { $gt: cutoff }, $and: [excludeFrozen()] },
             { $set: { offlineAlertedAt: null } },
         );
         summary.recovered = recovered.modifiedCount || 0;
@@ -69,6 +70,7 @@ async function runDeviceHealthCheck(now = new Date()) {
         devices = await Device.find({
             status: 'active',
             adminId: { $ne: null },
+            $and: [excludeFrozen()], // companies kept on the previous release are watched there
             // A device that has genuinely never reported (null lastSeenAt) is
             // a claim that was never completed, not an outage — it has no
             // working baseline to have regressed from.

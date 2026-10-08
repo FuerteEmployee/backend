@@ -13,6 +13,7 @@ const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const mongoose = require('mongoose');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
 const { istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
+const { isFrozenUser, sendFrozen } = require('../utils/frozen_tenants');
 
 /**
  * Normalise a Biometric Device ID (the PIN an employee is enrolled under on a
@@ -315,6 +316,9 @@ exports.loginRequest = async (req, res) => {
             return res.status(404).json({ code: 'not_registered', message: 'You are not registered. Please contact your admin to register you first.' });
         }
 
+        // A company kept on the previous release signs in there, never here.
+        if (isFrozenUser(user)) return sendFrozen(res);
+
         if (app === 'botlens' && user.role !== 'admin') return res.status(403).json(BOTLENS_ADMIN_ONLY);
 
         const refusal = await loginRefusal(user);
@@ -352,6 +356,10 @@ exports.verifyOtp = async (req, res) => {
 
         const wrongKey = `wrong:${phone}`;
         const user = await User.findOne({ phone });
+
+        // Before the code is even looked at: a code the previous release issued
+        // to a frozen company's user must not be consumed (or honoured) here.
+        if (user && isFrozenUser(user)) return sendFrozen(res);
 
         // No pending code (never asked, already used, or deleted after too many
         // wrong tries) is "expired". The old check compared the stored value to

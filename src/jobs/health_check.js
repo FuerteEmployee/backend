@@ -16,6 +16,7 @@ const HealthFinding = require('../models/HealthFinding');
 const { calculateDistance, isTrustworthyFix } = require('../utils/distance');
 const { MAX_PLAUSIBLE_SPEED_MPS } = require('../utils/geofence_window');
 const { istDateKey, istStartOfDay } = require('../utils/attendance_helpers');
+const { isFrozenTenant } = require('../utils/frozen_tenants');
 
 // The health check: looks through recent real data for the patterns behind
 // every bug real phones found on staging, so they reach the super admin's
@@ -437,6 +438,11 @@ async function runHealthCheck(now = new Date(), { dryRun = false, deep } = {}) {
                 }
             }
         });
+    }
+
+    // Companies kept on the previous release are not this release's to report on.
+    for (let i = found.length - 1; i >= 0; i--) {
+        if (isFrozenTenant(found[i].adminId)) found.splice(i, 1);
     }
 
     summary.found = found.length;

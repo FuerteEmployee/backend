@@ -18,6 +18,7 @@ const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, stri
 const { istCalendarDate, parseIstWallClock, istHHMM } = require('../utils/attendance_helpers');
 const { findWorkingDay } = require('../utils/working_day');
 const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock');
+const { isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
 
 // A punch photo a device may send: a base64 JPEG/PNG/WebP data URL, at most
 // ~3 MB. Anything else from the camera endpoint -- a URL, a path, a huge
@@ -1866,6 +1867,7 @@ exports.devicePunch = async (req, res) => {
     if (String(employee.adminId) !== String(adminId)) {
         return res.status(409).json({ message: 'adminId does not match this employee\'s actual tenant — refusing to record attendance under the wrong company' });
     }
+    if (isFrozenTenant(employee.adminId)) return sendFrozen(res);
 
     req.adminId = adminId;
     req.userId = employeeId;

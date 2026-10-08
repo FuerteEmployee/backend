@@ -18,6 +18,7 @@ const { findWorkingDay, workDayKey, lateOutDayStart } = require('../utils/workin
 const { withEmployeeLock } = require('../utils/employee_lock');
 const Device = require('../models/Device');
 const { recordClockSkew, observeServerOffset, toServerTime } = require('../utils/device_clock');
+const { isFrozenTenant } = require('../utils/frozen_tenants');
 const { sendDeviceClockAlert } = require('../jobs/notify');
 
 // Maps a resolved action name to the handler that records it.
@@ -355,6 +356,13 @@ exports.pushData = async (req, res) => {
     }
 
     const adminId = device.adminId;
+
+    // A company kept on the previous release records its taps there. Not
+    // acknowledged (500), so the machine keeps the batch instead of losing it.
+    if (isFrozenTenant(adminId)) {
+        console.warn(`[iclock] SN=${sn} belongs to a frozen company; not recording ${lines.length} punch(es) here`);
+        return res.status(500).type('text/plain').send('ERROR');
+    }
 
     // One Settings read per push batch, not per line.
     const settings = await Settings.findOne({ adminId }).select('attendance');

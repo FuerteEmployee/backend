@@ -1221,6 +1221,49 @@ atest('lock: an Express handler is wrapped per signed-in user, and a request wit
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  Frozen companies (FROZEN_TENANT_IDS): kept on the previous release
+// ═════════════════════════════════════════════════════════════════════════════
+section('frozen_tenants');
+{
+    const ft = require('../src/utils/frozen_tenants');
+    const FROZEN = '6a2d11c3bee6693b7ae623ab', OTHER = '6a6990c0835fb1fb12e33268';
+    const saved = process.env.FROZEN_TENANT_IDS;
+
+    test('unset means nobody is frozen, and the job filter is empty', () => {
+        delete process.env.FROZEN_TENANT_IDS;
+        assert.equal(ft.isFrozenTenant(FROZEN), false);
+        assert.deepEqual(ft.excludeFrozen(), {});
+    });
+    test('a listed tenant is frozen, another is not (spaces and blanks ignored)', () => {
+        process.env.FROZEN_TENANT_IDS = ` ${FROZEN} , ,`;
+        assert.equal(ft.isFrozenTenant(FROZEN), true);
+        assert.equal(ft.isFrozenTenant(OTHER), false);
+        assert.equal(ft.isFrozenTenant(null), false);
+    });
+    test('an admin is its own tenant; staff belong to adminId; a super admin is never frozen', () => {
+        process.env.FROZEN_TENANT_IDS = FROZEN;
+        assert.equal(ft.isFrozenUser({ role: 'admin', _id: FROZEN }), true);
+        assert.equal(ft.isFrozenUser({ role: 'employee', _id: OTHER, adminId: FROZEN }), true);
+        assert.equal(ft.isFrozenUser({ role: 'subadmin', _id: OTHER, adminId: FROZEN }), true);
+        assert.equal(ft.isFrozenUser({ role: 'employee', _id: FROZEN, adminId: OTHER }), false);
+        assert.equal(ft.isFrozenUser({ role: 'superadmin', _id: FROZEN }), false);
+    });
+    test('the job filter leaves exactly the frozen tenants out', () => {
+        process.env.FROZEN_TENANT_IDS = FROZEN;
+        const f = ft.excludeFrozen();
+        assert.deepEqual(f.adminId.$nin.map(String), [FROZEN]);
+    });
+    test('the refusal is a 403 with code frozen_tenant', () => {
+        let status = 0, body = null;
+        const res = { status(s) { status = s; return res; }, json(b) { body = b; return res; } };
+        ft.sendFrozen(res);
+        assert.equal(status, 403);
+        assert.equal(body.code, 'frozen_tenant');
+    });
+    if (saved === undefined) delete process.env.FROZEN_TENANT_IDS; else process.env.FROZEN_TENANT_IDS = saved;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  Summary
 // ═════════════════════════════════════════════════════════════════════════════
 

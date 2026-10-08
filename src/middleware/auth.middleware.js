@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { isFrozenUser, isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
 
 const protect = async (req, res, next) => {
     let token;
@@ -29,6 +30,10 @@ const protect = async (req, res, next) => {
             if (!user) {
                 return res.status(401).json({ message: 'Not authorized, user not found' });
             }
+            // A company kept on the previous release: its session belongs to
+            // that release. Decided from the database record, before anything
+            // else runs, so no request of theirs is ever acted on here.
+            if (isFrozenUser(user) || isFrozenTenant(req.adminId)) return sendFrozen(res);
             if (user.status === 'inactive') {
                 return res.status(401).json({
                     code: 'account_inactive',

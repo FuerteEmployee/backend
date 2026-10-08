@@ -4,6 +4,7 @@ const Settings = require('../models/Settings');
 const { istStartOfDay, istEndOfDay, istDateKey, istShiftOccurrence } = require('../utils/attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, shiftTimeOnDate, syncRootPunchOut } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
+const { excludeFrozen } = require('../utils/frozen_tenants');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Close sessions nobody ever punched out of.
@@ -99,6 +100,7 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false, employe
         date: { $gte: dayStart, $lte: dayEnd },
         punchIn: { $ne: null },
         $or: [{ punchOut: null }, { 'shifts.punchOut': null }],
+        ...excludeFrozen(), // companies kept on the previous release close their days there
         ...(Array.isArray(employeeIds) && employeeIds.length ? { employeeId: { $in: employeeIds } } : {}),
     });
 
