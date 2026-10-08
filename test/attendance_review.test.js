@@ -1099,6 +1099,35 @@ test('clock: a manual Clock correction still wins over the learned offset', () =
     assert.equal(istHHMM(toServerTime(device, terminalStamp(clockIst(16, 2), 330))), '16:02');
 });
 
+test('clock: a NEW terminal whose first contact is an offline backlog keeps the taps at their own times', () => {
+    const device = {};
+    // Correct clock, nothing learned, taps from 10:00-11:30 delivered together at 14:00.
+    const stored = deliver(device, [clockIst(10, 0), clockIst(10, 30), clockIst(11, 30)], clockIst(14, 0));
+    assert.deepEqual(stored.map(istHHMM), ['10:00', '10:30', '11:30']);
+    assert.equal(device.serverOffsetMs ?? null, null);
+});
+
+test('clock: ...a 2-hour backlog is not mistaken for a 2-hour clock offset', () => {
+    const device = {};
+    const stored = deliver(device, [clockIst(10, 0), clockIst(12, 0)], clockIst(14, 0));
+    assert.deepEqual(stored.map(istHHMM), ['10:00', '12:00']);
+});
+
+test('clock: back online after 8 days, a week of taps stays on its own days', () => {
+    const device = {};
+    deliver(device, [clockIst(9, 0)], clockIst(9, 0, 1));
+    const day = 24 * 60 * MIN;
+    const taps = [1, 2, 6].map((d) => new Date(clockIst(9, 30).getTime() + d * day));
+    const stored = deliver(device, taps, new Date(clockIst(9, 0).getTime() + 8 * day));
+    stored.forEach((s, i) => assert.ok(Math.abs(s.getTime() - taps[i].getTime()) < MIN, `${s.toISOString()} vs ${taps[i].toISOString()}`));
+});
+
+test('clock: a NEW terminal left on UTC is still learned from its first live tap', () => {
+    const device = {};
+    const [stored] = deliver(device, [terminalStamp(clockIst(10, 0), 330)], clockIst(10, 0, 2));
+    assert.equal(istHHMM(stored), '10:00');
+});
+
 test('clock: recordClockSkew (the clock alert) still records each tap', () => {
     const device = { clockSkewSamples: [] };
     recordClockSkew(device, terminalStamp(clockIst(16, 2), 330), clockIst(16, 2));

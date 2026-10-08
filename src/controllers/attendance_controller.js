@@ -1848,6 +1848,11 @@ exports.devicePunch = async (req, res) => {
     if (!handler) {
         return res.status(400).json({ message: `Invalid action '${action}'. Expected one of: ${Object.keys(handlers).join(', ')}` });
     }
+    // A malformed id made findById throw a CastError, which reached the caller
+    // as a 500 carrying Mongoose's own message.
+    if (!mongoose.isValidObjectId(employeeId) || !mongoose.isValidObjectId(adminId)) {
+        return res.status(400).json({ message: 'adminId and employeeId must be valid ids' });
+    }
 
     // The calling device (BOTLens) sends its own locally-cached adminId, which
     // can drift out of sync with the employee's actual tenant (e.g. if it gets

@@ -39,8 +39,17 @@ const KNOWN_TZ_OFFSETS = [330, 300, 270, 240, 210, 180, 120, 60, 360, 420, 480, 
 /** Live-push jitter: two taps this close in offset are the same clock. */
 const OFFSET_TOLERANCE_MS = 2 * 60 * 1000;
 
-/** An offset nothing has confirmed for this long is relearned from scratch. */
-const OFFSET_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A first reading that can be believed on sight: a correct clock (about zero)
+ * or a terminal left on UTC (330 min, the IST offset). Only these two: any
+ * other value, including a whole number of hours, is just as likely an offline
+ * backlog that happens to be that old, and goes through confirmation instead
+ * (several live taps agreeing over half an hour).
+ */
+const IST_OFFSET_MS = 330 * 60 * 1000;
+function isPlausibleClockOffset(ms) {
+    return Math.abs(ms) <= OFFSET_TOLERANCE_MS || Math.abs(ms - IST_OFFSET_MS) <= OFFSET_TOLERANCE_MS;
+}
 
 /**
  * A LARGER offset (the clock fell further behind) is only believed once this
@@ -149,8 +158,6 @@ function observeServerOffset(device, deviceTime, receivedAt = new Date()) {
     if (!Number.isFinite(reading)) return false;
 
     const known = Number.isFinite(device.serverOffsetMs) ? device.serverOffsetMs : null;
-    const confirmedAt = device.serverOffsetConfirmedAt ? new Date(device.serverOffsetConfirmedAt).getTime() : 0;
-    const stale = known === null || at.getTime() - confirmedAt > OFFSET_STALE_MS;
 
     const adopt = (ms) => {
         device.serverOffsetMs = ms;
@@ -159,9 +166,23 @@ function observeServerOffset(device, deviceTime, receivedAt = new Date()) {
         return true;
     };
 
-    if (stale || reading < known - OFFSET_TOLERANCE_MS) return adopt(reading);
-
-    if (reading <= known + OFFSET_TOLERANCE_MS) {
+    // Nothing learned yet. The first reading is believed on sight only when it
+    // can only be a live tap: within jitter of zero (a correct clock) or of a
+    // whole timezone offset (a terminal left on UTC reads 330 min). Anything
+    // else may be an offline backlog, and adopting it shifts every tap in that
+    // backlog to the moment it arrived: a new terminal whose first contact
+    // flushed taps made at 10:00 stored them at 12:00, graded late; one
+    // reconnecting after a week moved a week of taps onto the wrong days. Such a
+    // reading goes through the same confirmation as a clock that fell behind
+    // (several live taps agreeing over half an hour), and until then taps keep
+    // the terminal's own time, which is what they had before this conversion.
+    if (known === null) {
+        if (isPlausibleClockOffset(reading)) return adopt(reading);
+    } else if (reading < known - OFFSET_TOLERANCE_MS) {
+        // Smaller is always believed: only a live tap or a clock put right can
+        // produce it, however long ago the offset was last confirmed.
+        return adopt(reading);
+    } else if (reading <= known + OFFSET_TOLERANCE_MS) {
         // A live tap. Keep the smaller of the two: delay only ever adds.
         device.serverOffsetConfirmedAt = at;
         if (reading < known) device.serverOffsetMs = reading;
