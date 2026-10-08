@@ -18,6 +18,7 @@
 
 const { istStartOfDay, istDateKey, applyPunchRounding, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks } = require('./attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, gradeDay } = require('./shift_status');
+const { lateArrival } = require('./late_arrival');
 // Safe to require directly: salary_controller pulls only models and utils, so
 // there is no cycle back into this file or into attendance_controller.
 const { calculateAndSaveSalary } = require('../controllers/salary_controller');
@@ -171,6 +172,12 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
     // out on the terminal. The raw taps stay authoritative for the tap list;
     // the session array belongs to whichever channel actually opened it.
     const existing = Array.isArray(attendance.shifts) ? attendance.shifts.filter(Boolean) : [];
+    // When a tap the derivation used reached the server late (held by an
+    // offline terminal), so the session can say so. utils/late_arrival.js.
+    const arrivedLate = (time) => {
+        const tap = time ? taps.find((t) => +new Date(t.deviceTime) === +new Date(time)) : null;
+        return tap ? lateArrival(tap.deviceTime, tap.receivedAt || tap.createdAt) : null;
+    };
     const deviceSource = attendance.source === 'lens' ? 'lens' : 'biometric';
 
     if (existing.length > 1) {
@@ -178,12 +185,14 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
         if (nowOwned.includes('punchIn') && existing[0]) {
             existing[0].punchIn = attendance.punchIn;
             existing[0].punchInSource = deviceSource;
+            existing[0].punchInReceivedAt = arrivedLate(derived.punchIn);
         }
         if (nowOwned.includes('punchOut')) {
             const last = existing[existing.length - 1];
             if (last) {
                 last.punchOut = attendance.punchOut;
                 last.punchOutSource = deviceSource;
+                last.punchOutReceivedAt = arrivedLate(derived.punchOut);
                 last.closeReason = 'device';
             }
         }
@@ -202,6 +211,10 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
                 : null,
             closeReason: attendance.punchOut
                 ? (nowOwned.includes('punchOut') ? 'device' : (prev.closeReason || 'manual'))
+                : null,
+            punchInReceivedAt: nowOwned.includes('punchIn') ? arrivedLate(derived.punchIn) : (prev.punchInReceivedAt || null),
+            punchOutReceivedAt: attendance.punchOut
+                ? (nowOwned.includes('punchOut') ? arrivedLate(derived.punchOut) : (prev.punchOutReceivedAt || null))
                 : null,
         }];
     }

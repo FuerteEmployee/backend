@@ -92,6 +92,14 @@ const AttendanceSchema = new mongoose.Schema({
         punchOutAccuracy: { type: Number, default: null },
         punchInDistance: { type: Number, default: null },
         punchOutDistance: { type: Number, default: null },
+        // When the server received a machine tap that arrived late: the
+        // terminal was offline, kept the tap, and sent it once the network
+        // came back. Set only when it arrived well after it was tapped
+        // (utils/late_arrival.js), so a value here means "recorded offline".
+        // Shown next to the punch, because a tap that arrives after the day
+        // has moved on can land as an odd session, and the reason must be visible.
+        punchInReceivedAt: { type: Date, default: null },
+        punchOutReceivedAt: { type: Date, default: null },
         // Net worked ms for THIS session, clamped to the shift window by
         // computeWorkedMs(). Stored per session so the UI can show a per-row
         // duration without re-deriving the shift clamp in the browser -- the

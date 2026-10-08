@@ -19,6 +19,7 @@ const { istCalendarDate, parseIstWallClock, istHHMM } = require('../utils/attend
 const { findWorkingDay } = require('../utils/working_day');
 const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock');
 const { isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
+const { lateArrival } = require('../utils/late_arrival');
 
 // A punch photo a device may send: a base64 JPEG/PNG/WebP data URL, at most
 // ~3 MB. Anything else from the camera endpoint -- a URL, a path, a huge
@@ -279,6 +280,8 @@ function sessionEndFields(end, { req, address, location, accuracy, distance }) {
         [`${end}Coordinates`]: location || null,
         [`${end}Accuracy`]: fix.accuracy,
         [`${end}Distance`]: Number.isFinite(Number(distance)) ? Number(distance) : null,
+        // A machine tap the terminal held while offline and sent later.
+        [`${end}ReceivedAt`]: req?.isDevicePunch ? lateArrival(req.tapTime) : null,
     };
 }
 

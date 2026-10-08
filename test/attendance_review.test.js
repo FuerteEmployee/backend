@@ -1264,6 +1264,27 @@ section('frozen_tenants');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  Machine taps recorded offline and sent later (utils/late_arrival.js)
+// ═════════════════════════════════════════════════════════════════════════════
+section('late_arrival');
+{
+    const { lateArrival } = require('../src/utils/late_arrival');
+    const tap = new Date('2026-10-08T16:09:55+05:30');
+    test('a tap that arrived 23 minutes later is flagged with its arrival time', () => {
+        const got = new Date('2026-10-08T16:33:05+05:30');
+        assert.equal(+lateArrival(tap, got), +got);
+    });
+    test('normal delivery (seconds, or under 2 minutes) is not flagged', () => {
+        assert.equal(lateArrival(tap, new Date(+tap + 4000)), null);
+        assert.equal(lateArrival(tap, new Date(+tap + 119000)), null);
+    });
+    test('unusable times are not flagged', () => {
+        assert.equal(lateArrival(null, new Date()), null);
+        assert.equal(lateArrival('garbage', new Date()), null);
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  OTA channels beside the frozen previous release (utils/ota_channels.js)
 // ═════════════════════════════════════════════════════════════════════════════
 section('ota_channels');
