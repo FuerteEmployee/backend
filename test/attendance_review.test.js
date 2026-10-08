@@ -1264,6 +1264,35 @@ section('frozen_tenants');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  OTA channels beside the frozen previous release (utils/ota_channels.js)
+// ═════════════════════════════════════════════════════════════════════════════
+section('ota_channels');
+{
+    const oc = require('../src/utils/ota_channels');
+    const saved = process.env.OTA_CHANNEL_SET;
+    test('unset: the usual production / pilot names', () => {
+        delete process.env.OTA_CHANNEL_SET;
+        assert.deepEqual(oc.channelNames(), { everyone: 'production', pilot: 'pilot' });
+        assert.equal(oc.fromUi('production'), 'production');
+    });
+    test('v2: names the previous release never queries', () => {
+        process.env.OTA_CHANNEL_SET = 'v2';
+        const n = oc.channelNames();
+        assert.deepEqual(n, { everyone: 'v2', pilot: 'v2-pilot' });
+        assert.ok(!['production', 'pilot'].includes(n.everyone) && !['production', 'pilot'].includes(n.pilot));
+        assert.equal(oc.fromUi('production'), 'v2');
+        assert.equal(oc.fromUi('pilot'), 'v2-pilot');
+        assert.equal(oc.fromUi('anything'), null);
+    });
+    test('the screen always sees production / pilot', () => {
+        assert.equal(oc.toUi('v2'), 'production');
+        assert.equal(oc.toUi('v2-pilot'), 'pilot');
+        assert.equal(oc.toUi('pilot'), 'pilot');
+    });
+    if (saved === undefined) delete process.env.OTA_CHANNEL_SET; else process.env.OTA_CHANNEL_SET = saved;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  Summary
 // ═════════════════════════════════════════════════════════════════════════════
 

@@ -26,6 +26,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const mongoose = require('mongoose');
 const AppRelease = require('./src/models/AppRelease');
+const { channelNames } = require('./src/utils/ota_channels');
 
 // The frontend checkout is named differently on the dev machine
 // (botcrm-frontend-) than on the server (~/frontend), so resolve rather than
@@ -223,7 +224,9 @@ function parseArgs(argv) {
         version,
         url: `${BASE_URL.replace(/\/$/, '')}/bundles/${zipName}`,
         checksum,
-        channel: production ? 'production' : 'pilot',
+        // 'v2' / 'v2-pilot' when OTA_CHANNEL_SET=v2 (production's new backend):
+        // the frozen previous release never reads those (utils/ota_channels.js).
+        channel: production ? channelNames().everyone : channelNames().pilot,
         pilotAdminIds,
         platform: 'android',
         sizeBytes: buf.length,

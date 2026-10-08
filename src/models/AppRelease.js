@@ -31,7 +31,9 @@ const AppReleaseSchema = new mongoose.Schema({
     // in pilotAdminIds — a staged rollout. Normally a paid cloud feature;
     // trivial here because the update check reaches our own backend, which
     // knows which tenant is asking (the app sets custom_id after login).
-    channel: { type: String, enum: ['production', 'pilot'], default: 'pilot', index: true },
+    // 'v2' / 'v2-pilot' are the same two audiences for the current app in
+    // production, kept apart from the frozen previous release (utils/ota_channels.js).
+    channel: { type: String, enum: ['production', 'pilot', 'v2', 'v2-pilot'], default: 'pilot', index: true },
     pilotAdminIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
 
     // Lets a bad release be pulled instantly without deleting the record —

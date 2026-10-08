@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { isOlderThanApk } = require('../utils/ota_version');
 const AppRelease = require('../models/AppRelease');
+const { channelNames, toUi, fromUi } = require('../utils/ota_channels');
 const OtaCheckin = require('../models/OtaCheckin');
 const User = require('../models/User');
 
@@ -81,9 +82,10 @@ exports.checkForUpdate = async (req, res) => {
         // bundle pinned them to it until somebody disabled it by hand
         // (scratch/disable_stale_pilot.js exists for exactly that). getApkRelease
         // below had the same flaw and was fixed the same way.
-        const eligible = [{ channel: 'production' }];
+        const ch = channelNames();
+        const eligible = [{ channel: ch.everyone }];
         if (customId && mongoose.Types.ObjectId.isValid(customId)) {
-            eligible.push({ channel: 'pilot', pilotAdminIds: new mongoose.Types.ObjectId(customId) });
+            eligible.push({ channel: ch.pilot, pilotAdminIds: new mongoose.Types.ObjectId(customId) });
         }
         const release = await AppRelease.findOne({
             enabled: true,
@@ -164,7 +166,7 @@ exports.getFleet = async (req, res) => {
         const rows = await OtaCheckin.find({ lastSeenAt: { $gte: since }, isEmulator: { $ne: true } })
             .sort({ lastSeenAt: -1 }).limit(2000).lean();
 
-        const latest = await AppRelease.findOne({ channel: 'production', enabled: true })
+        const latest = await AppRelease.findOne({ channel: channelNames().everyone, enabled: true })
             .sort({ createdAt: -1 }).select('version').lean();
         const tenantIds = [...new Set(rows.map((r) => r.adminId && String(r.adminId)).filter(Boolean))];
         const tenants = await User.find({ _id: { $in: tenantIds } }).select('name companyName').lean();
@@ -202,12 +204,15 @@ exports.getFleet = async (req, res) => {
 
 exports.listReleases = async (req, res) => {
     try {
-        const releases = await AppRelease.find({})
+        // Only this server's own audiences: in production the frozen previous
+        // release's rows are not this console's to show or change.
+        const ch = channelNames();
+        const releases = await AppRelease.find({ channel: { $in: [ch.everyone, ch.pilot] } })
             .populate('pilotAdminIds', 'name companyName')
             .sort({ createdAt: -1 })
             .limit(50)
             .lean();
-        res.json(releases);
+        res.json(releases.map((r) => ({ ...r, channel: toUi(r.channel) })));
     } catch (error) {
         console.error('[ota] list releases failed:', error);
         res.status(500).json({ message: 'Could not load the web bundles. Please try again.' });
@@ -239,8 +244,9 @@ async function readPilotIds(raw) {
 exports.updateRelease = async (req, res) => {
     try {
         if (!isObjectId(String(req.params.id))) return res.status(404).json({ message: 'Release not found.' });
+        const ch = channelNames();
         const existing = await AppRelease.findById(req.params.id);
-        if (!existing) return res.status(404).json({ message: 'Release not found.' });
+        if (!existing || ![ch.everyone, ch.pilot].includes(existing.channel)) return res.status(404).json({ message: 'Release not found.' });
 
         const { enabled, channel, pilotAdminIds, notes } = req.body || {};
         if (enabled !== undefined && typeof enabled !== 'boolean') {
@@ -254,23 +260,23 @@ exports.updateRelease = async (req, res) => {
         }
 
         if (enabled !== undefined) existing.enabled = enabled;
-        if (channel !== undefined) existing.channel = channel;
+        if (channel !== undefined) existing.channel = fromUi(channel);
         if (pilotAdminIds !== undefined) {
             const pilot = await readPilotIds(pilotAdminIds);
             if (pilot.error) return res.status(400).json({ message: pilot.error });
             existing.pilotAdminIds = pilot.ids;
         }
         // Promoted to everyone: a leftover pilot list would only mislead.
-        if (existing.channel === 'production') existing.pilotAdminIds = [];
+        if (existing.channel === ch.everyone) existing.pilotAdminIds = [];
         if (notes !== undefined) existing.notes = notes.trim().slice(0, 500);
 
-        if (existing.enabled && existing.channel === 'pilot' && existing.pilotAdminIds.length === 0) {
+        if (existing.enabled && existing.channel === ch.pilot && existing.pilotAdminIds.length === 0) {
             return res.status(400).json({ message: 'A pilot release must name at least one company before it can be live.' });
         }
 
         await existing.save();
         const release = await AppRelease.findById(existing._id).populate('pilotAdminIds', 'name companyName').lean();
-        res.json(release);
+        res.json({ ...release, channel: toUi(release.channel) });
     } catch (error) {
         console.error('[ota] update release failed:', error);
         res.status(500).json({ message: 'Could not change the release. Please try again.' });
