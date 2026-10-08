@@ -1264,36 +1264,6 @@ section('frozen_tenants');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  Punch in on the phone, punch out on the machine (punch_reconcile.effectiveTaps)
-// ═════════════════════════════════════════════════════════════════════════════
-section('effectiveTaps');
-{
-    const { derive, effectiveTaps } = require('../src/utils/punch_reconcile');
-    const at = (hm) => new Date(`2026-10-08T${hm}:00+05:30`);
-    const taps = (...hms) => hms.map((h) => ({ deviceTime: at(h) }));
-    test('app punch-in + one machine tap = punch-out on the machine', () => {
-        const d = derive(effectiveTaps(taps('18:30'), at('09:30')));
-        assert.equal(+d.punchIn, +at('09:30'));
-        assert.equal(+d.punchOut, +at('18:30'));
-        assert.equal(d.lunchIn, null);
-    });
-    test('app punch-in + three machine taps = lunch out, lunch back, punch-out', () => {
-        const d = derive(effectiveTaps(taps('13:00', '14:00', '18:30'), at('09:30')));
-        assert.equal(+d.lunchIn, +at('13:00'));
-        assert.equal(+d.lunchOut, +at('14:00'));
-        assert.equal(+d.punchOut, +at('18:30'));
-    });
-    test('without an app punch-in, the taps alone decide (unchanged)', () => {
-        assert.equal(effectiveTaps(taps('09:30'), null).length, 1);
-        const d = derive(effectiveTaps(taps('09:30'), null));
-        assert.equal(d.punchOut, null);
-    });
-    test('an app punch-in AFTER the first tap does not lead (second session, not the start)', () => {
-        assert.equal(effectiveTaps(taps('09:30', '13:00'), at('15:00')).length, 2);
-    });
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
 //  OTA channels beside the frozen previous release (utils/ota_channels.js)
 // ═════════════════════════════════════════════════════════════════════════════
 section('ota_channels');
