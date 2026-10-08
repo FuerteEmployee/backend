@@ -84,6 +84,30 @@ function derive(taps) {
 }
 
 /**
+ * The sequence the derivation should read: the machine's taps, led by a
+ * punch-in made in the app when that came first.
+ *
+ * "Punch in on the phone, punch out on the machine" is a normal day, and the
+ * app's punch-in IS the day's first event. Reading the taps alone, that day's
+ * single machine tap counted as a punch-in (ignored, since the app owns
+ * punchIn) and no punch-out was ever written: the day stayed open until the
+ * 04:00 job closed it at shift end. With the app punch-in leading, one tap is
+ * the punch-out, three taps after it are lunch-out/lunch-back/punch-out, and so on.
+ *
+ * Pure: plain values in and out.
+ *
+ * @param {Array<{deviceTime: Date}>} taps   accepted taps, ascending
+ * @param {Date|string|null} appPunchIn      punch-in set by the app (not by a previous derivation)
+ */
+function effectiveTaps(taps, appPunchIn) {
+    const list = taps || [];
+    if (!appPunchIn || list.length === 0) return list;
+    const appAt = new Date(appPunchIn);
+    if (!(appAt < new Date(list[0].deviceTime))) return list;
+    return [{ deviceTime: appAt, fromApp: true }, ...list];
+}
+
+/**
  * Which action, if any, the derivation assigned to each tap — written back onto
  * the PunchLog rows so the expandable list can label them.
  */
@@ -115,7 +139,6 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
 
     if (taps.length === 0) return null;
 
-    const derived = derive(taps);
     const [y, m, d] = dayKey.split('-').map(Number);
     const dayStart = istStartOfDay(new Date(Date.UTC(y, m - 1, d, 12)));
 
@@ -141,12 +164,23 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
     const owned = new Set(attendance.derivedFields || []);
     const nowOwned = [];
 
+    const appPunchIn = attendance.punchIn && !owned.has('punchIn') ? attendance.punchIn : null;
+    const sequence = effectiveTaps(taps, appPunchIn);
+    const derived = derive(sequence);
+
     // Only write a field when it is empty, or when the last reconciliation is
     // the thing that put a value there. A value we don't own came from the app.
     const put = (field, value, roundLabel) => {
         const current = attendance[field];
         if (current && !owned.has(field)) return; // explicit app value — leave it
-        if (!value) return;
+        if (!value) {
+            // Our own earlier reading no longer holds: four taps made a lunch,
+            // a fifth means the middle taps carry no meaning any more. Left in
+            // place, the old lunch stayed on the day and, no longer listed as
+            // ours, could never be corrected again.
+            if (current && owned.has(field)) attendance[field] = null;
+            return;
+        }
         attendance[field] = roundLabel ? applyPunchRounding(new Date(value), roundLabel, settings) : new Date(value);
         nowOwned.push(field);
     };
@@ -268,10 +302,11 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
 
     // Label each tap with the current interpretation so the expandable list can
     // show "punch in / punch out / (extra)" beside each time.
+    const offset = sequence.length - taps.length; // 1 when the app punch-in leads
     const ops = taps.map((tap, i) => ({
         updateOne: {
             filter: { _id: tap._id },
-            update: { $set: { derivedAction: actionForIndex(i, taps.length) } },
+            update: { $set: { derivedAction: actionForIndex(i + offset, sequence.length) } },
         },
     }));
     if (ops.length) await PunchLog.bulkWrite(ops, { ordered: false });
@@ -295,4 +330,4 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
     return attendance;
 }
 
-module.exports = { derive, actionForIndex, debounceMs, reconcileDay, DEFAULT_DEBOUNCE_SECONDS, istDateKey };
+module.exports = { derive, effectiveTaps, actionForIndex, debounceMs, reconcileDay, DEFAULT_DEBOUNCE_SECONDS, istDateKey };
