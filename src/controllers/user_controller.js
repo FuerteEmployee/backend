@@ -287,6 +287,25 @@ const sendRefusal = (res, refusal) => {
 // for every other caller.
 const BOTLENS_ADMIN_ONLY = { message: 'Only company admins can access BOTLens. Please contact your administrator.' };
 
+// A permanent login code instead of the on-screen OTP, for the few accounts the
+// owner asked for (2026-10-09: one admin). Set ONLY on the server, never in this
+// public repo: FIXED_LOGIN_CODES="<phone>:<sha256 of 'bot-fixed-login:<code>'>,...".
+// For such a phone, login-request issues no OTP and verify-otp accepts only the
+// code. Wrong codes count against the same per-phone limit as OTPs (5 per 15
+// minutes), so the code cannot be guessed. Every other phone is unchanged.
+const fixedLoginHash = (phone) => {
+    for (const pair of String(process.env.FIXED_LOGIN_CODES || '').split(',')) {
+        const [p, h] = pair.split(':').map((x) => (x || '').trim());
+        if (p && h && p === phone && /^[a-f0-9]{64}$/i.test(h)) return h.toLowerCase();
+    }
+    return null;
+};
+const fixedLoginMatches = (hash, code) => {
+    const given = crypto.createHash('sha256').update(`bot-fixed-login:${code}`).digest();
+    const stored = Buffer.from(hash, 'hex');
+    return stored.length === given.length && crypto.timingSafeEqual(stored, given);
+};
+
 exports.loginRequest = async (req, res) => {
     const { app } = req.body || {};
     try {
@@ -323,6 +342,12 @@ exports.loginRequest = async (req, res) => {
 
         const refusal = await loginRefusal(user);
         if (refusal) return sendRefusal(res, refusal);
+
+        // A permanent login code: no OTP is made or shown for this phone.
+        if (fixedLoginHash(phone)) {
+            counterBump(reqKey);
+            return res.status(200).json({ message: 'Enter your login code', fixedCode: true });
+        }
 
         // No SMS gateway is wired up -- the OTP is shown directly on screen, so
         // it's generated here and returned as-is rather than sent out-of-band.
@@ -361,11 +386,28 @@ exports.verifyOtp = async (req, res) => {
         // to a frozen company's user must not be consumed (or honoured) here.
         if (user && isFrozenUser(user)) return sendFrozen(res);
 
+        // A permanent login code (see fixedLoginHash): checked instead of an OTP,
+        // with the same wrong-try limit, then on to the same sign-in below.
+        const fixedHash = user ? fixedLoginHash(phone) : null;
+        if (fixedHash) {
+            if (app === 'botlens' && user.role !== 'admin') return res.status(403).json(BOTLENS_ADMIN_ONLY);
+            if (counterCount(wrongKey) >= LOGIN_MAX_WRONG_OTP) {
+                ipFailure(ipKey);
+                return res.status(429).json({ code: 'otp_locked', message: `Too many wrong codes. Please wait ${waitWords(minutesLeft(wrongKey))} and try again.` });
+            }
+            if (!fixedLoginMatches(fixedHash, otp)) {
+                ipFailure(ipKey);
+                const left = LOGIN_MAX_WRONG_OTP - counterBump(wrongKey);
+                if (left <= 0) return res.status(429).json({ code: 'otp_locked', message: `Too many wrong codes. Please wait ${waitWords(minutesLeft(wrongKey))} and try again.` });
+                return res.status(400).json({ code: 'otp_wrong', message: `Wrong code. Please check and try again (${left} ${left === 1 ? 'try' : 'tries'} left).`, attemptsLeft: left });
+            }
+        }
+
         // No pending code (never asked, already used, or deleted after too many
         // wrong tries) is "expired". The old check compared the stored value to
         // the submitted one, so a request with NO otp against an account with
         // no pending code matched undefined === undefined and signed in.
-        if (!user || !user.otp || !user.otpExpiry || user.otpExpiry < new Date()) {
+        if (!fixedHash && (!user || !user.otp || !user.otpExpiry || user.otpExpiry < new Date())) {
             ipFailure(ipKey);
             return res.status(400).json({ code: 'otp_expired', message: 'This code has expired. Please ask for a new code.' });
         }
@@ -377,14 +419,14 @@ exports.verifyOtp = async (req, res) => {
 
         // Checked before comparing, and synchronously with the bump below, so
         // parallel guesses cannot all slip past the limit.
-        if (counterCount(wrongKey) >= LOGIN_MAX_WRONG_OTP) {
+        if (!fixedHash && counterCount(wrongKey) >= LOGIN_MAX_WRONG_OTP) {
             ipFailure(ipKey);
             return res.status(429).json({ code: 'otp_locked', message: 'Too many wrong codes. Please ask for a new code.' });
         }
 
-        const stored = Buffer.from(String(user.otp));
+        const stored = Buffer.from(String(user.otp || ''));
         const given = Buffer.from(otp);
-        const matches = stored.length === given.length && crypto.timingSafeEqual(stored, given);
+        const matches = fixedHash ? true : (stored.length === given.length && crypto.timingSafeEqual(stored, given));
         if (!matches) {
             ipFailure(ipKey);
             const wrong = counterBump(wrongKey);
@@ -403,7 +445,9 @@ exports.verifyOtp = async (req, res) => {
 
         // Single use, atomically: of two requests carrying the same correct
         // code, only the one that removes it gets a token.
-        const consumed = await User.updateOne({ _id: user._id, otp: user.otp }, { $unset: { otp: 1, otpExpiry: 1 } });
+        const consumed = fixedHash
+            ? { modifiedCount: 1 }
+            : await User.updateOne({ _id: user._id, otp: user.otp }, { $unset: { otp: 1, otpExpiry: 1 } });
         if (!consumed.modifiedCount) {
             return res.status(400).json({ code: 'otp_expired', message: 'This code has expired. Please ask for a new code.' });
         }
