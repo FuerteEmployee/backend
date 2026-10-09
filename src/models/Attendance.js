@@ -100,6 +100,12 @@ const AttendanceSchema = new mongoose.Schema({
         // has moved on can land as an odd session, and the reason must be visible.
         punchInReceivedAt: { type: Date, default: null },
         punchOutReceivedAt: { type: Date, default: null },
+        // The PunchLog tap that made this end, when a machine or face tap did.
+        // The day rebuild (utils/punch_reconcile.js) re-reads such an end from
+        // its tap every time; an end WITHOUT one was written by the app, an
+        // admin or a job, and the rebuild keeps it exactly as it is.
+        punchInTapId: { type: mongoose.Schema.Types.ObjectId, default: null },
+        punchOutTapId: { type: mongoose.Schema.Types.ObjectId, default: null },
         // Net worked ms for THIS session, clamped to the shift window by
         // computeWorkedMs(). Stored per session so the UI can show a per-row
         // duration without re-deriving the shift clamp in the browser -- the

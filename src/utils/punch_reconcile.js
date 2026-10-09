@@ -17,8 +17,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { istStartOfDay, istDateKey, applyPunchRounding, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks } = require('./attendance_helpers');
-const { computeWorkedMs, computeSessionWorkMs, gradeDay } = require('./shift_status');
+const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay } = require('./shift_status');
 const { lateArrival } = require('./late_arrival');
+const { buildDay } = require('./day_timeline');
+const { resolveConfig: resolveSequence } = require('./punch_sequence');
 // Safe to require directly: salary_controller pulls only models and utils, so
 // there is no cycle back into this file or into attendance_controller.
 const { calculateAndSaveSalary } = require('../controllers/salary_controller');
@@ -97,26 +99,101 @@ function actionForIndex(index, total) {
     return null;
 }
 
+// Channels that only say "I was here". Every other source on a session end
+// (app, admin, system) is an explicit decision the rebuild keeps as it is.
+const TAP_SOURCES = new Set(['biometric', 'lens']);
+
+const plain = (doc) => (doc && typeof doc.toObject === 'function' ? doc.toObject() : { ...(doc || {}) });
+
+// The per-END fields of a session, so an end the rebuild keeps can be carried
+// across whole: its time, channel, location, photo, accuracy and late flag.
+const endFields = (end) => {
+    const p = end === 'in' ? 'punchIn' : 'punchOut';
+    return [p, `${p}Source`, `${p}Location`, `${p}Coordinates`, `${p}Accuracy`, `${p}Distance`, `${p}ReceivedAt`, `${p}TapId`];
+};
+
 /**
- * Re-derive and persist one employee's attendance for one IST day.
+ * The explicit events already in the row, as fixed points of the timeline.
  *
- * Fields explicitly set by the app are never overwritten. The app sends a real
- * action ("punch out"), which is a stronger signal than anything positional
- * inference can produce, so an employee who punches in on their phone and taps
- * out on the terminal keeps their real 09:30 start. `derivedFields` records
- * which fields the previous reconciliation owns, which is what makes that
- * distinction possible without a second source-of-truth flag per field.
+ * A session end is fixed unless the rebuild itself can reproduce it from a
+ * tap: one carrying a tap id, or (rows written before tap ids existed) the
+ * first punch-in / last punch-out listed in `derivedFields`. Anything else --
+ * an app punch, an admin edit, an auto punch-out, a machine punch written by
+ * the old sequence path with no tap behind it -- cannot be re-derived, so it is
+ * kept exactly as it is. Losing a punch is the one outcome a rebuild must never
+ * produce.
+ *
+ * The 04:00 job's shift-end close is the exception: it is a stand-in for a
+ * punch-out nobody made, so a real tap after that session started replaces it.
+ */
+function fixedEventsFromRow(attendance, taps) {
+    const owned = new Set(attendance.derivedFields || []);
+    const sessions = (Array.isArray(attendance.shifts) ? attendance.shifts : []).filter(Boolean).map(plain);
+    const lastIdx = sessions.length - 1;
+    const events = [];
+
+    const reproducible = (s, end, si) => {
+        if (s[end === 'in' ? 'punchInTapId' : 'punchOutTapId']) return true;
+        const source = s[end === 'in' ? 'punchInSource' : 'punchOutSource'];
+        if (!TAP_SOURCES.has(source)) return false;
+        return end === 'in' ? (si === 0 && owned.has('punchIn')) : (si === lastIdx && owned.has('punchOut'));
+    };
+
+    sessions.forEach((s, si) => {
+        if (s.punchIn && !reproducible(s, 'in', si)) {
+            events.push({ kind: 'fixed', at: new Date(s.punchIn), action: 'punch-in', ref: { si, end: 'in' } });
+        }
+        if (s.punchOut && !reproducible(s, 'out', si)) {
+            const placeholder = s.closeReason === 'shift_end'
+                && taps.some((t) => new Date(t.deviceTime) > new Date(s.punchIn || 0));
+            if (!placeholder) {
+                events.push({ kind: 'fixed', at: new Date(s.punchOut), action: 'punch-out', ref: { si, end: 'out' } });
+            }
+        }
+    });
+
+    // Day-level values the sessions do not show: a row with no session array,
+    // and an app punch-out that overrode a machine's provisional one (the app
+    // path writes it to the day and leaves the machine-closed session alone).
+    const sameTime = (a, b) => a && b && +new Date(a) === +new Date(b);
+    if (attendance.punchIn && !owned.has('punchIn') && !sessions.some((s) => sameTime(s.punchIn, attendance.punchIn))) {
+        events.push({ kind: 'fixed', at: new Date(attendance.punchIn), action: 'punch-in', ref: { root: true, end: 'in' } });
+    }
+    if (attendance.punchOut && !owned.has('punchOut') && !attendance.punchOutIsProvisional
+        && !sessions.some((s) => sameTime(s.punchOut, attendance.punchOut))) {
+        events.push({ kind: 'fixed', at: new Date(attendance.punchOut), action: 'punch-out', ref: { root: true, end: 'out' } });
+    }
+    if (attendance.lunchInTime && !owned.has('lunchInTime')) {
+        events.push({ kind: 'fixed', at: new Date(attendance.lunchInTime), action: 'lunch-in', ref: { lunch: 'in' } });
+    }
+    if (attendance.lunchOutTime && !owned.has('lunchOutTime')) {
+        events.push({ kind: 'fixed', at: new Date(attendance.lunchOutTime), action: 'lunch-out', ref: { lunch: 'out' } });
+    }
+    return { events, sessions };
+}
+
+/**
+ * Rebuild and persist one employee's attendance for one IST day, from every
+ * tap the machines and face kiosks recorded PLUS everything the app, admins and
+ * jobs already wrote. utils/day_timeline.js decides; this writes.
+ *
+ * Explicit values are never changed. The app sends a real action ("punch out"),
+ * which is a stronger signal than anything read from a tap's position, so an
+ * employee who punches in on the phone and taps out on the machine keeps their
+ * real 09:30 start -- and the machine tap now closes the day instead of being
+ * read as a second punch-in and dropped.
+ *
+ * Does nothing for a day with no taps: an app-only day is never touched.
  *
  * @returns the saved Attendance document, or null when there is nothing to write
  */
 async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, employeeId, dayKey }) {
-    const taps = await PunchLog.find({ adminId, employeeId, dayKey, discarded: { $ne: true } })
+    const taps = await PunchLog.find({ adminId, employeeId, dayKey, discarded: { $ne: true }, source: { $ne: 'app' } })
         .sort({ deviceTime: 1 })
         .lean();
 
     if (taps.length === 0) return null;
 
-    const derived = derive(taps);
     const [y, m, d] = dayKey.split('-').map(Number);
     const dayStart = istStartOfDay(new Date(Date.UTC(y, m - 1, d, 12)));
 
@@ -134,90 +211,79 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
             employeeId,
             date: dayStart,
             status: 'present',
-            source: 'biometric',
+            source: TAP_SOURCES.has(taps[0].source) ? taps[0].source : 'biometric',
             derivedFields: [],
         });
     }
 
-    const owned = new Set(attendance.derivedFields || []);
+    // The company's own tap order, when it set one, applied in tap-time order.
+    const seq = resolveSequence(settings);
+    const rule = seq.enabled ? { mode: 'sequence', steps: seq.steps, afterLast: seq.afterLast } : { mode: 'count' };
+
+    const { events: fixed, sessions: oldSessions } = fixedEventsFromRow(attendance, taps);
+    const tapEvents = taps.map((t) => ({ kind: 'tap', at: new Date(t.deviceTime), tap: t }));
+    const day = buildDay([...fixed, ...tapEvents], rule);
+
+    // One END of a rebuilt session, from whichever event made it.
+    const endFrom = (idx, end) => {
+        if (idx === null || idx === undefined) return null;
+        const ev = day.events[idx];
+        const p = end === 'in' ? 'punchIn' : 'punchOut';
+        if (ev.kind === 'fixed') {
+            if (ev.ref && ev.ref.si !== undefined) {
+                const s = oldSessions[ev.ref.si] || {};
+                const out = {};
+                for (const k of endFields(end)) out[k] = s[k] === undefined ? null : s[k];
+                if (end === 'out') out.closeReason = s.closeReason || 'manual';
+                out.fromTap = false;
+                return out;
+            }
+            // A day-level value: the app wrote it.
+            return { [p]: new Date(ev.at), [`${p}Source`]: 'app', ...(end === 'out' ? { closeReason: 'manual' } : {}), fromTap: false };
+        }
+        const t = ev.tap;
+        const label = end === 'in' ? 'Punch In' : 'Punch Out';
+        return {
+            [p]: applyPunchRounding(new Date(t.deviceTime), label, settings),
+            [`${p}Source`]: TAP_SOURCES.has(t.source) ? t.source : 'biometric',
+            [`${p}ReceivedAt`]: lateArrival(t.deviceTime, t.receivedAt || t.createdAt),
+            [`${p}TapId`]: t._id,
+            ...(end === 'out' ? { closeReason: 'device' } : {}),
+            fromTap: true,
+        };
+    };
+
+    const rebuilt = day.sessions.map((s) => {
+        const inEnd = endFrom(s.in, 'in');
+        const outEnd = endFrom(s.out, 'out');
+        const session = {};
+        if (inEnd) { const { fromTap, ...rest } = inEnd; Object.assign(session, rest); }
+        if (outEnd) { const { fromTap, ...rest } = outEnd; Object.assign(session, rest); }
+        else { session.punchOut = null; session.closeReason = null; }
+        return { session, inFromTap: !!inEnd?.fromTap, outFromTap: !!outEnd?.fromTap };
+    }).filter((r) => r.session.punchIn || r.session.punchOut);
+
+    const first = rebuilt[0] || null;
+    const lastS = rebuilt[rebuilt.length - 1] || null;
     const nowOwned = [];
 
-    // Only write a field when it is empty, or when the last reconciliation is
-    // the thing that put a value there. A value we don't own came from the app.
-    const put = (field, value, roundLabel) => {
-        const current = attendance[field];
-        if (current && !owned.has(field)) return; // explicit app value — leave it
-        if (!value) return;
-        attendance[field] = roundLabel ? applyPunchRounding(new Date(value), roundLabel, settings) : new Date(value);
-        nowOwned.push(field);
-    };
+    attendance.shifts = rebuilt.map((r) => r.session);
+    attendance.punchIn = first?.session.punchIn || null;
+    if (first?.inFromTap) nowOwned.push('punchIn');
+    attendance.punchOut = lastS?.session.punchOut || null;
+    if (lastS?.session.punchOut && lastS.outFromTap) nowOwned.push('punchOut');
 
-    put('punchIn', derived.punchIn, 'Punch In');
-    put('lunchInTime', derived.lunchIn);
-    put('lunchOutTime', derived.lunchOut);
-    put('punchOut', derived.punchOut, 'Punch Out');
+    // Lunch is day-level and read once; a tap-made end is ours, an app one is not.
+    const lunchAt = (idx) => (idx === null ? null : new Date(day.events[idx].at));
+    attendance.lunchInTime = lunchAt(day.lunchIn);
+    attendance.lunchOutTime = lunchAt(day.lunchOut);
+    if (day.lunchIn !== null && day.events[day.lunchIn].kind !== 'fixed') nowOwned.push('lunchInTime');
+    if (day.lunchOut !== null && day.events[day.lunchOut].kind !== 'fixed') nowOwned.push('lunchOutTime');
 
     attendance.derivedFields = nowOwned;
-
-    // A device-set punch-out is provisional: the terminal only reports that
-    // somebody was recognised, so the last tap so far may not be the real end
-    // of day. An explicit app punch-out (which we would not own) is final.
-    attendance.punchOutIsProvisional = attendance.punchOut ? nowOwned.includes('punchOut') : false;
-
-    // ── Sessions ────────────────────────────────────────────────────────────
-    // Reconciliation must NEVER flatten a day the app has already split into
-    // several sessions. Rebuilding shifts[] from the two derived endpoints
-    // deleted sessions 2..n outright -- which is precisely the day this whole
-    // system exists to support: punched in on the phone, lunch on the camera,
-    // out on the terminal. The raw taps stay authoritative for the tap list;
-    // the session array belongs to whichever channel actually opened it.
-    const existing = Array.isArray(attendance.shifts) ? attendance.shifts.filter(Boolean) : [];
-    // When a tap the derivation used reached the server late (held by an
-    // offline terminal), so the session can say so. utils/late_arrival.js.
-    const arrivedLate = (time) => {
-        const tap = time ? taps.find((t) => +new Date(t.deviceTime) === +new Date(time)) : null;
-        return tap ? lateArrival(tap.deviceTime, tap.receivedAt || tap.createdAt) : null;
-    };
-    const deviceSource = attendance.source === 'lens' ? 'lens' : 'biometric';
-
-    if (existing.length > 1) {
-        // Multi-session day: touch only the ends this derivation owns.
-        if (nowOwned.includes('punchIn') && existing[0]) {
-            existing[0].punchIn = attendance.punchIn;
-            existing[0].punchInSource = deviceSource;
-            existing[0].punchInReceivedAt = arrivedLate(derived.punchIn);
-        }
-        if (nowOwned.includes('punchOut')) {
-            const last = existing[existing.length - 1];
-            if (last) {
-                last.punchOut = attendance.punchOut;
-                last.punchOutSource = deviceSource;
-                last.punchOutReceivedAt = arrivedLate(derived.punchOut);
-                last.closeReason = 'device';
-            }
-        }
-        attendance.shifts = existing;
-    } else if (attendance.punchIn) {
-        const prev = existing[0]
-            ? (typeof existing[0].toObject === 'function' ? existing[0].toObject() : existing[0])
-            : {};
-        attendance.shifts = [{
-            ...prev,
-            punchIn: attendance.punchIn,
-            punchOut: attendance.punchOut || null,
-            punchInSource: nowOwned.includes('punchIn') ? deviceSource : (prev.punchInSource || 'app'),
-            punchOutSource: attendance.punchOut
-                ? (nowOwned.includes('punchOut') ? deviceSource : (prev.punchOutSource || 'app'))
-                : null,
-            closeReason: attendance.punchOut
-                ? (nowOwned.includes('punchOut') ? 'device' : (prev.closeReason || 'manual'))
-                : null,
-            punchInReceivedAt: nowOwned.includes('punchIn') ? arrivedLate(derived.punchIn) : (prev.punchInReceivedAt || null),
-            punchOutReceivedAt: attendance.punchOut
-                ? (nowOwned.includes('punchOut') ? arrivedLate(derived.punchOut) : (prev.punchOutReceivedAt || null))
-                : null,
-        }];
-    }
+    // A tap-made punch-out is provisional: the machine or camera only knows the
+    // person was there, so the last tap so far may not be the end of the day.
+    attendance.punchOutIsProvisional = nowOwned.includes('punchOut');
 
     // Worked time through the SAME function the live punch-out path uses.
     // This was a local gross-minus-break sum with no shift clamp and no
@@ -226,6 +292,7 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
     attendance.totalWorkMs = computeWorkedMs(attendance, shift, settings);
     for (const sess of (attendance.shifts || [])) {
         sess.workMs = computeSessionWorkMs(sess, attendance, shift);
+        sess.grossMs = computeSessionGrossMs(sess);
     }
 
     // Status, recomputed the same way the live punch-out and regularization
@@ -279,14 +346,13 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
 
     await attendance.save();
 
-    // Label each tap with the current interpretation so the expandable list can
-    // show "punch in / punch out / (extra)" beside each time.
-    const ops = taps.map((tap, i) => ({
-        updateOne: {
-            filter: { _id: tap._id },
-            update: { $set: { derivedAction: actionForIndex(i, taps.length) } },
-        },
-    }));
+    // Label each tap with its meaning in the rebuilt day, so the expandable
+    // list can show "punch in / punch out / (seen)" beside each time.
+    const ops = [];
+    day.events.forEach((e, i) => {
+        if (e.kind !== 'tap') return;
+        ops.push({ updateOne: { filter: { _id: e.tap._id }, update: { $set: { derivedAction: day.labels[i] || null } } } });
+    });
     if (ops.length) await PunchLog.bulkWrite(ops, { ordered: false });
 
     // Keep payroll in step, the same way the live punch-out, leave approval and

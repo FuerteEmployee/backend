@@ -1314,6 +1314,125 @@ section('ota_channels');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  One day, three channels (utils/day_timeline.js)
+// ═════════════════════════════════════════════════════════════════════════════
+section('day_timeline');
+{
+    const { buildDay } = require('../src/utils/day_timeline');
+    const at = (hhmm) => new Date(`2026-10-09T${hhmm}:00+05:30`);
+    const tap = (hhmm, source = 'biometric') => ({ kind: 'tap', at: at(hhmm), source });
+    const fx = (hhmm, action) => ({ kind: 'fixed', at: at(hhmm), action });
+    const hm = (d) => new Date(new Date(d).getTime() + IST_OFFSET_MS).toISOString().slice(11, 16);
+    // Plain shape of a built day: sessions as "in-out", lunch, and the meaning of each event.
+    const shape = (day) => ({
+        sessions: day.sessions.map((s) => `${s.in === null ? '--' : hm(day.events[s.in].at)}-${s.out === null ? '--' : hm(day.events[s.out].at)}`),
+        lunch: `${day.lunchIn === null ? '--' : hm(day.events[day.lunchIn].at)}-${day.lunchOut === null ? '--' : hm(day.events[day.lunchOut].at)}`,
+        labels: day.labels,
+    });
+    const count = { mode: 'count' };
+    const seq = (afterLast = 'ignore') => ({ mode: 'sequence', steps: ['punch-in', 'lunch-in', 'lunch-out', 'punch-out'], afterLast });
+
+    test('machine only, unchanged: 1 tap = in, day open', () => {
+        assert.deepEqual(shape(buildDay([tap('09:30')], count)), { sessions: ['09:30---'], lunch: '-----', labels: ['punch-in'] });
+    });
+    test('machine only, unchanged: 3 taps = first in, last out, middle seen', () => {
+        assert.deepEqual(shape(buildDay([tap('09:30'), tap('13:00'), tap('18:30')], count)),
+            { sessions: ['09:30-18:30'], lunch: '-----', labels: ['punch-in', null, 'punch-out'] });
+    });
+    test('machine only, unchanged: exactly 4 taps = in / lunch / lunch / out', () => {
+        assert.deepEqual(shape(buildDay([tap('18:30'), tap('09:30'), tap('14:00'), tap('13:00')], count)),
+            { sessions: ['09:30-18:30'], lunch: '13:00-14:00', labels: ['punch-in', 'lunch-in', 'lunch-out', 'punch-out'] });
+    });
+    test('phone in 09:30, machine 18:30: the machine tap is the punch-out (was: day left open)', () => {
+        assert.deepEqual(shape(buildDay([fx('09:30', 'punch-in'), tap('18:30')], count)),
+            { sessions: ['09:30-18:30'], lunch: '-----', labels: ['punch-in', 'punch-out'] });
+    });
+    test('machine 09:30, face 13:00, face 14:00, phone out 18:30: four events, lunch from the face', () => {
+        assert.deepEqual(shape(buildDay([tap('09:30'), tap('13:00', 'lens'), tap('14:00', 'lens'), fx('18:30', 'punch-out')], count)),
+            { sessions: ['09:30-18:30'], lunch: '13:00-14:00', labels: ['punch-in', 'lunch-in', 'lunch-out', 'punch-out'] });
+    });
+    test('machine 16:05, late machine 16:09, phone out 16:31: one session to 16:31, 16:09 only seen', () => {
+        assert.deepEqual(shape(buildDay([tap('16:05'), fx('16:31', 'punch-out'), tap('16:09')], count)),
+            { sessions: ['16:05-16:31'], lunch: '-----', labels: ['punch-in', null, 'punch-out'] });
+    });
+    test('...and the same day under the sequence rule: 16:09 is lunch start, never a new punch-in', () => {
+        const day = shape(buildDay([tap('16:05'), fx('16:31', 'punch-out'), tap('16:09')], seq('toggle')));
+        assert.deepEqual(day.sessions, ['16:05-16:31']);
+        assert.ok(!day.labels.slice(1).includes('punch-in'));
+    });
+    test('phone in, phone Start Lunch 13:00, face 13:45: the face sighting ends lunch', () => {
+        assert.deepEqual(shape(buildDay([fx('09:30', 'punch-in'), fx('13:00', 'lunch-in'), tap('13:45', 'lens')], count)),
+            { sessions: ['09:30---'], lunch: '13:00-13:45', labels: ['punch-in', 'lunch-in', 'lunch-out'] });
+    });
+    test('...then a machine tap at 18:30 closes the day', () => {
+        assert.deepEqual(shape(buildDay([fx('09:30', 'punch-in'), fx('13:00', 'lunch-in'), tap('13:45', 'lens'), tap('18:30')], count)),
+            { sessions: ['09:30-18:30'], lunch: '13:00-13:45', labels: ['punch-in', 'lunch-in', 'lunch-out', 'punch-out'] });
+    });
+    test('phone in 09:30, machine 13:00 and 14:00 (3 events): lunch not guessed yet, 14:00 provisional out', () => {
+        assert.deepEqual(shape(buildDay([fx('09:30', 'punch-in'), tap('13:00'), tap('14:00')], count)),
+            { sessions: ['09:30-14:00'], lunch: '-----', labels: ['punch-in', null, 'punch-out'] });
+    });
+    test('...and a fourth event at 18:30 turns the middle two into lunch', () => {
+        assert.deepEqual(shape(buildDay([fx('09:30', 'punch-in'), tap('13:00'), tap('14:00'), tap('18:30')], count)),
+            { sessions: ['09:30-18:30'], lunch: '13:00-14:00', labels: ['punch-in', 'lunch-in', 'lunch-out', 'punch-out'] });
+    });
+    test('a machine tap that arrived late but happened before the app punch-in: the app start wins', () => {
+        assert.deepEqual(shape(buildDay([tap('09:10'), fx('09:30', 'punch-in'), fx('13:00', 'lunch-in'), fx('14:00', 'lunch-out')], count)),
+            { sessions: ['09:30---'], lunch: '13:00-14:00', labels: [null, 'punch-in', 'lunch-in', 'lunch-out'] });
+    });
+    test('app sessions S1 and S2 kept, a later tap closes S2', () => {
+        const day = shape(buildDay([fx('09:00', 'punch-in'), fx('12:00', 'punch-out'), fx('14:00', 'punch-in'), tap('18:00')], count));
+        assert.deepEqual(day.sessions, ['09:00-12:00', '14:00-18:00']);
+        assert.equal(day.labels[3], 'punch-out');
+    });
+    test('a tap after the app closed the day is only seen (no session it could belong to)', () => {
+        const day = shape(buildDay([fx('09:00', 'punch-in'), fx('18:00', 'punch-out'), tap('18:05')], count));
+        assert.deepEqual(day.sessions, ['09:00-18:00']);
+        assert.equal(day.labels[2], null);
+    });
+    test('machine in/out, then phone punch-in again: two sessions, the machine pair kept', () => {
+        assert.deepEqual(shape(buildDay([tap('09:00'), tap('13:00'), fx('14:00', 'punch-in')], count)).sessions, ['09:00-13:00', '14:00---']);
+    });
+    test('...and a machine tap at 18:00 closes the second session', () => {
+        assert.deepEqual(shape(buildDay([tap('09:00'), tap('13:00'), fx('14:00', 'punch-in'), tap('18:00')], count)).sessions,
+            ['09:00-13:00', '14:00-18:00']);
+    });
+    test('after the phone punch-out, two machine taps are a new session; one is only seen', () => {
+        assert.deepEqual(shape(buildDay([fx('09:00', 'punch-in'), fx('13:00', 'punch-out'), tap('14:00'), tap('18:00')], count)).sessions,
+            ['09:00-13:00', '14:00-18:00']);
+        assert.deepEqual(shape(buildDay([fx('09:00', 'punch-in'), fx('13:00', 'punch-out'), tap('13:05')], count)).sessions,
+            ['09:00-13:00']);
+    });
+    test('fixed events are never dropped or relabelled', () => {
+        const events = [tap('08:00'), fx('09:00', 'punch-in'), tap('10:00'), fx('11:00', 'lunch-in'), tap('11:30'), fx('12:00', 'lunch-out'), tap('17:00'), fx('18:00', 'punch-out')];
+        const day = buildDay(events, count);
+        day.events.forEach((e, i) => { if (e.kind === 'fixed') assert.equal(day.labels[i], e.action); });
+    });
+    test('sequence rule: 2 taps = in, lunch start (the company asked for that order)', () => {
+        assert.deepEqual(shape(buildDay([tap('09:30'), tap('13:00')], seq())).labels, ['punch-in', 'lunch-in']);
+    });
+    test('sequence rule: a lunch started on the phone is not asked for again by the machine', () => {
+        assert.deepEqual(shape(buildDay([tap('09:30'), fx('13:00', 'lunch-in'), tap('14:00'), tap('18:30')], seq())).labels,
+            ['punch-in', 'lunch-in', 'lunch-out', 'punch-out']);
+    });
+    test('sequence rule, afterLast ignore: a 5th tap is seen', () => {
+        assert.deepEqual(shape(buildDay([tap('09:30'), tap('13:00'), tap('14:00'), tap('18:30'), tap('19:00')], seq())).labels.slice(4), [null]);
+    });
+    test('sequence rule, afterLast toggle: taps 5 and 6 are a second shift', () => {
+        const day = shape(buildDay([tap('09:30'), tap('13:00'), tap('14:00'), tap('18:30'), tap('20:00'), tap('23:00')], seq('toggle')));
+        assert.deepEqual(day.sessions, ['09:30-18:30', '20:00-23:00']);
+    });
+    test('order of arrival never matters, only tap time', () => {
+        const a = [fx('09:30', 'punch-in'), tap('13:00'), tap('14:00'), tap('18:30')];
+        const b = [tap('18:30'), tap('13:00'), fx('09:30', 'punch-in'), tap('14:00')];
+        assert.deepEqual(shape(buildDay(a, count)), shape(buildDay(b, count)));
+    });
+    test('empty day builds nothing', () => {
+        assert.deepEqual(shape(buildDay([], count)), { sessions: [], lunch: '-----', labels: [] });
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  Summary
 // ═════════════════════════════════════════════════════════════════════════════
 

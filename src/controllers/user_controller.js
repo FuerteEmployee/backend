@@ -1423,6 +1423,10 @@ exports.deleteUser = async (req, res) => {
         const user = await User.findOneAndDelete({ _id: employeeId, adminId, role: 'employee' });
         if (!user) return res.status(404).json({ message: 'User not found' });
 
+        // Their registered face goes with them: a face kiosk must never be able
+        // to recognise someone who is no longer in the company.
+        await require('../models/FaceProfile').deleteMany({ adminId: user.adminId, employeeId: user._id });
+
         // Sync employeesUsed count on the tenant's subscription (if subscription exists)
         if (user.role === 'employee' && req.adminId) {
             const count = await User.countDocuments({ adminId: req.adminId, role: 'employee' });

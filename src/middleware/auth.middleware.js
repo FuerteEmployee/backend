@@ -22,6 +22,12 @@ const protect = async (req, res, next) => {
             
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+            // A face kiosk's key opens the kiosk routes and nothing else
+            // (protectLens below); it must never reach the admin panel.
+            if (decoded.scope) {
+                return res.status(401).json({ message: 'Not authorized for this page' });
+            }
+
             req.adminId = decoded.adminId;
             req.userId = decoded.userId;
             req.user = decoded;
@@ -136,5 +142,65 @@ const superAdminOnly = (req, res, next) => {
     }
 };
 
-module.exports = { protect, adminOnly, panelOnly, superAdminOnly, checkPermission };
+// ── Face kiosk (BOTLens) ────────────────────────────────────────────────────
+//
+// A kiosk sits on a shared device, so it carries its own key rather than an
+// admin's sign-in: a JWT with scope 'lens' naming a LensKiosk record. It can
+// report sightings and, with a fresh enroll grant, register faces -- nothing
+// else. `protect` refuses it, and this refuses every other token.
+//
+// Checked on every request, from the database, never from the token alone:
+// the kiosk must not be switched off, the company must be on and not kept on
+// the previous release. The subscription check is the usual checkSubscription,
+// placed after this on the router.
+const LENS_SEEN_THROTTLE_MS = 5 * 60 * 1000;
+
+const protectLens = async (req, res, next) => {
+    try {
+        const header = req.headers.authorization || '';
+        const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+        if (!token) return res.status(401).json({ code: 'kiosk_key_missing', message: 'This kiosk is not set up. Ask your admin to sign in on it.' });
+
+        let decoded;
+        try {
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
+        } catch {
+            return res.status(401).json({ code: 'kiosk_key_invalid', message: 'This kiosk needs to be set up again. Ask your admin to sign in on it.' });
+        }
+        if (decoded.scope !== 'lens' || !decoded.kioskId || !decoded.adminId) {
+            return res.status(401).json({ code: 'kiosk_key_invalid', message: 'This kiosk needs to be set up again. Ask your admin to sign in on it.' });
+        }
+
+        const LensKiosk = require('../models/LensKiosk');
+        const kiosk = await LensKiosk.findOne({ _id: decoded.kioskId, adminId: decoded.adminId }).lean();
+        if (!kiosk || kiosk.revokedAt) {
+            return res.status(401).json({ code: 'kiosk_switched_off', message: 'This kiosk was switched off by your admin.' });
+        }
+
+        if (isFrozenTenant(decoded.adminId)) return sendFrozen(res);
+        const admin = await User.findOne({ _id: decoded.adminId, role: 'admin' }).select('isActive status companyName name').lean();
+        if (!admin || admin.isActive === false || admin.status === 'inactive') {
+            return res.status(401).json({ code: 'company_inactive', message: "This company's B.O.T account is switched off." });
+        }
+
+        req.adminId = String(decoded.adminId);
+        req.kioskId = String(kiosk._id);
+        req.kiosk = kiosk;
+        req.kioskAdmin = admin;
+        // A role no other guard accepts: panelOnly, adminOnly and the employee
+        // routes all refuse it, so a kiosk key mounted on the wrong router
+        // still opens nothing.
+        req.user = { role: 'lens-kiosk', adminId: req.adminId };
+
+        if (!kiosk.lastSeenAt || Date.now() - new Date(kiosk.lastSeenAt).getTime() > LENS_SEEN_THROTTLE_MS) {
+            LensKiosk.updateOne({ _id: kiosk._id }, { $set: { lastSeenAt: new Date() } }).catch(() => {});
+        }
+        return next();
+    } catch (error) {
+        console.error('[lens] key check failed:', error.message);
+        return res.status(500).json({ message: 'Could not check this kiosk. Try again.' });
+    }
+};
+
+module.exports = { protect, adminOnly, panelOnly, superAdminOnly, checkPermission, protectLens };
 

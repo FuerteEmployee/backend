@@ -20,6 +20,14 @@ const { findWorkingDay } = require('../utils/working_day');
 const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock');
 const { isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
 const { lateArrival } = require('../utils/late_arrival');
+const { rebuildAfterAppPunch } = require('../utils/tap_ingest');
+
+// A day field the person just set in the app is theirs, not a reading of a
+// machine or face tap: take it off the list the day rebuild treats as its own
+// (Attendance.derivedFields), or the next rebuild would re-derive it away.
+function dropDerived(attendance, fields) {
+    attendance.derivedFields = (attendance.derivedFields || []).filter((f) => !fields.includes(f));
+}
 
 // A punch photo a device may send: a base64 JPEG/PNG/WebP data URL, at most
 // ~3 MB. Anything else from the camera endpoint -- a URL, a path, a huge
@@ -575,6 +583,7 @@ exports.punchIn = async (req, res) => {
             }
             
             await attendance.save();
+            const rebuiltRe = req.isDevicePunch ? null : await rebuildAfterAppPunch(attendance);
 
             logAttendanceEvent({
                 adminId: req.adminId, employeeId, type: 'punch-in', at: punchInTime,
@@ -586,7 +595,7 @@ exports.punchIn = async (req, res) => {
             const summary = await getEmployeeSummary(req.adminId, employeeId);
             return res.status(201).json({
                 message: `Re-Punched In successfully.`,
-                attendance,
+                attendance: rebuiltRe || attendance,
                 summary
             });
         }
@@ -686,6 +695,9 @@ exports.punchIn = async (req, res) => {
         });
 
         await attendance.save();
+        // The day may also hold machine or face taps: re-read them against what
+        // the app just did (utils/tap_ingest.js). No-op on an app-only day.
+        const rebuilt = req.isDevicePunch ? null : await rebuildAfterAppPunch(attendance);
 
         // The FIRST punch-in of the day had no evidence row -- the logger was
         // wired only into the re-punch branch below and into punch-out, so a
@@ -702,7 +714,7 @@ exports.punchIn = async (req, res) => {
 
         res.status(201).json({
             message: `Punch-in Successful. Status: ${status}`,
-            attendance,
+            attendance: rebuilt || attendance,
             summary
         });
     } catch (error) {
@@ -987,6 +999,9 @@ exports.punchOut = async (req, res) => {
 
         const punchOutFix = fixQuality(accuracy, fixAt);
         attendance.punchOut = punchOutTime;
+        // Written by the person, not read from a tap: the day rebuild must keep
+        // it (utils/punch_reconcile.js treats a listed field as its own).
+        if (!req.isDevicePunch) dropDerived(attendance, ['punchOut']);
         attendance.punchOutAccuracy = punchOutFix.accuracy;
         attendance.punchOutFixAt = punchOutFix.fixAt;
         attendance.punchOutLocation = address || "Location provided by user";
@@ -1078,6 +1093,9 @@ exports.punchOut = async (req, res) => {
         }
 
         await attendance.save();
+        // The day may also hold machine or face taps: re-read them against what
+        // the app just did (utils/tap_ingest.js). No-op on an app-only day.
+        const rebuilt = req.isDevicePunch ? null : await rebuildAfterAppPunch(attendance);
 
         logAttendanceEvent({
             adminId: req.adminId, employeeId, type: 'punch-out', at: punchOutTime,
@@ -1090,8 +1108,10 @@ exports.punchOut = async (req, res) => {
 
         res.json({
             message: 'Punch-out Successful',
-            workHours: Number.isFinite(netWorkHours) ? netWorkHours.toFixed(2) : '0.00',
-            attendance
+            workHours: rebuilt
+                ? (Number(rebuilt.totalWorkMs || 0) / 3600000).toFixed(2)
+                : (Number.isFinite(netWorkHours) ? netWorkHours.toFixed(2) : '0.00'),
+            attendance: rebuilt || attendance
         });
 
         // 6. Background Sync Salary -- for the month the DAY is in, in IST.
@@ -1189,10 +1209,14 @@ exports.lunchIn = async (req, res) => {
         }
 
         attendance.lunchInTime = applyPunchRounding(now, 'Lunch In', settings);
+        if (!req.isDevicePunch) dropDerived(attendance, ['lunchInTime']);
         attendance.lunchInLocation = address || "Location provided by user";
         attendance.lunchInCoordinates = location || null;
         attendance.lunchInDistance = lunchInDistance;
         await attendance.save();
+        // The day may also hold machine or face taps: re-read them against what
+        // the app just did (utils/tap_ingest.js). No-op on an app-only day.
+        const rebuilt = req.isDevicePunch ? null : await rebuildAfterAppPunch(attendance);
 
         // Lunch had no evidence row on any channel -- so a break taken on the
         // Lens camera left nothing behind but two timestamps on the day state,
@@ -1204,7 +1228,7 @@ exports.lunchIn = async (req, res) => {
             distanceFromBranch: lunchInDistance,
         });
 
-        res.json(attendance);
+        res.json(rebuilt || attendance);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -1245,6 +1269,7 @@ exports.lunchOut = async (req, res) => {
             }
             if (!attendance.lunchInTime) {
                 attendance.lunchInTime = attendance.punchOut;
+                if (!req.isDevicePunch) dropDerived(attendance, ['lunchInTime']);
                 attendance.lunchInLocation = attendance.punchOutLocation;
                 attendance.lunchInCoordinates = attendance.punchOutCoordinates;
                 attendance.lunchInDistance = attendance.punchOutDistance;
@@ -1287,10 +1312,14 @@ exports.lunchOut = async (req, res) => {
         const lunchOutDistance = lunchOutGeo.distance;
 
         attendance.lunchOutTime = applyPunchRounding(now, 'Lunch Out', settings);
+        if (!req.isDevicePunch) dropDerived(attendance, ['lunchOutTime']);
         attendance.lunchOutLocation = address || "Location provided by user";
         attendance.lunchOutCoordinates = location || null;
         attendance.lunchOutDistance = lunchOutDistance;
         await attendance.save();
+        // The day may also hold machine or face taps: re-read them against what
+        // the app just did (utils/tap_ingest.js). No-op on an app-only day.
+        const rebuilt = req.isDevicePunch ? null : await rebuildAfterAppPunch(attendance);
 
         // Lunch had no evidence row on any channel -- so a break taken on the
         // Lens camera left nothing behind but two timestamps on the day state,
@@ -1302,7 +1331,7 @@ exports.lunchOut = async (req, res) => {
             distanceFromBranch: lunchOutDistance,
         });
 
-        res.json(attendance);
+        res.json(rebuilt || attendance);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
