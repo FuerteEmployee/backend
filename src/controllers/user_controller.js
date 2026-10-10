@@ -1470,6 +1470,7 @@ exports.deleteUser = async (req, res) => {
         // Their registered face goes with them: a face kiosk must never be able
         // to recognise someone who is no longer in the company.
         await require('../models/FaceProfile').deleteMany({ adminId: user.adminId, employeeId: user._id });
+        await require('../models/AnnouncementResponse').deleteMany({ adminId: user.adminId, employeeId: user._id });
 
         // Sync employeesUsed count on the tenant's subscription (if subscription exists)
         if (user.role === 'employee' && req.adminId) {

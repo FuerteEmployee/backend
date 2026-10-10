@@ -262,7 +262,7 @@ const TENANT_DATA_MODELS = [
     'GeofencePendingExit', 'HrPolicy', 'Invoice', 'JobPosting', 'Lead', 'Leave', 'LeaveType',
     'LoginSession', 'OtaCheckin', 'PerformanceReview', 'Project', 'PunchLog', 'Regularization',
     'Salary', 'Settings', 'Shift', 'Ticket', 'TrackerEvent', 'Tracking', 'Training',
-    'HealthFinding', 'FaceProfile', 'LensKiosk',
+    'HealthFinding', 'FaceProfile', 'LensKiosk', 'AnnouncementResponse',
 ];
 
 const isObjectId = (v) => typeof v === 'string' && OBJECT_ID_RE.test(v);

@@ -1432,6 +1432,86 @@ section('day_timeline');
     });
 }
 
+section('Notice board: questions, audience, popups');
+{
+    const { readAnnouncementInput, readAnswer, inAudience, isPendingFor, questionChangeRefusal } = require('../src/controllers/announcement_controller')._test;
+    const NOW = new Date('2026-10-10T06:00:00Z');
+    const base = { title: 'Movie', content: 'Sunday 6 pm' };
+    test('a plain notice gets no question, no popup, everyone', () => {
+        const { data } = readAnnouncementInput(base, false, NOW);
+        assert.equal(data.question.kind, 'none');
+        assert.deepEqual(data.display, { popup: false, markAsRead: false });
+        assert.equal(data.audience.mode, 'all');
+    });
+    test('yes/no stores Yes and No whatever was sent', () => {
+        const { data } = readAnnouncementInput({ ...base, question: { kind: 'yes_no', options: ['x'] } }, false, NOW);
+        assert.deepEqual(data.question.options, ['Yes', 'No']);
+    });
+    test('pick-one needs two distinct choices', () => {
+        assert.ok(readAnnouncementInput({ ...base, question: { kind: 'single', options: ['A', ' '] } }, false, NOW).error);
+        assert.ok(readAnnouncementInput({ ...base, question: { kind: 'single', options: ['A', 'a'] } }, false, NOW).error);
+        assert.deepEqual(readAnnouncementInput({ ...base, question: { kind: 'multiple', options: [' A ', 'B'] } }, false, NOW).data.question.options, ['A', 'B']);
+    });
+    test('number: whole numbers, min defaults to 0, min <= max', () => {
+        const q = readAnnouncementInput({ ...base, question: { kind: 'number', max: 9, unit: 'passes' } }, false, NOW).data.question;
+        assert.equal(q.min, 0); assert.equal(q.max, 9); assert.equal(q.unit, 'passes');
+        assert.ok(readAnnouncementInput({ ...base, question: { kind: 'number', min: 5, max: 2 } }, false, NOW).error);
+        assert.ok(readAnnouncementInput({ ...base, question: { kind: 'number', max: 2.5 } }, false, NOW).error);
+    });
+    test('a new notice cannot close in the past; an edit can close it now', () => {
+        assert.ok(readAnnouncementInput({ ...base, closesAt: '2026-10-09T00:00:00Z' }, false, NOW).error);
+        assert.ok(readAnnouncementInput({ closesAt: '2026-10-09T00:00:00Z' }, true, NOW).data.closesAt);
+    });
+    test('audience needs at least one valid id unless everyone', () => {
+        assert.ok(readAnnouncementInput({ ...base, audience: { mode: 'branches', ids: [] } }, false, NOW).error);
+        assert.ok(readAnnouncementInput({ ...base, audience: { mode: 'branches', ids: ['nope'] } }, false, NOW).error);
+        assert.ok(readAnnouncementInput({ ...base, audience: { mode: 'branches', ids: [{ $ne: null }] } }, false, NOW).error);
+    });
+    test('answers are checked against the question', () => {
+        const yn = { kind: 'yes_no', options: ['Yes', 'No'] };
+        assert.deepEqual(readAnswer(yn, { choices: [0] }).data, { choices: [0] });
+        assert.ok(readAnswer(yn, { choices: [0, 1] }).error);
+        assert.ok(readAnswer(yn, { choices: [2] }).error);
+        assert.deepEqual(readAnswer({ kind: 'multiple', options: ['a', 'b', 'c'] }, { choices: [2, 0, 2] }).data, { choices: [0, 2] });
+        const num = { kind: 'number', min: 0, max: 9 };
+        assert.deepEqual(readAnswer(num, { number: 4 }).data, { number: 4 });
+        assert.ok(readAnswer(num, { number: 10 }).error);
+        assert.ok(readAnswer(num, { number: -1 }).error);
+        assert.ok(readAnswer(num, { number: 1.5 }).error);
+    });
+    test('audience: branch (primary or extra), department, shift, hand-picked', () => {
+        const u = { _id: 'e1', branchId: 'b1', branchIds: ['b2'], departmentId: 'd1', shiftId: 's1' };
+        assert.ok(inAudience({ audience: { mode: 'branches', ids: ['b2'] } }, u));
+        assert.ok(!inAudience({ audience: { mode: 'branches', ids: ['b9'] } }, u));
+        assert.ok(inAudience({ audience: { mode: 'departments', ids: ['d1'] } }, u));
+        assert.ok(inAudience({ audience: { mode: 'shifts', ids: ['s1'] } }, u));
+        assert.ok(inAudience({ audience: { mode: 'employees', ids: ['e1'] } }, u));
+        assert.ok(inAudience({}, u));
+    });
+    test('popup: only when ticked, until answered / read / seen', () => {
+        const created = new Date(NOW.getTime() - 864e5);
+        const plain = { createdAt: created, display: { popup: true }, question: { kind: 'none' } };
+        assert.ok(isPendingFor(plain, null, NOW));
+        assert.ok(!isPendingFor(plain, { seenAt: NOW }, NOW));
+        assert.ok(!isPendingFor({ ...plain, display: { popup: false } }, null, NOW));
+        const ack = { ...plain, display: { popup: true, markAsRead: true } };
+        assert.ok(isPendingFor(ack, { seenAt: NOW }, NOW));
+        assert.ok(!isPendingFor(ack, { seenAt: NOW, readAt: NOW }, NOW));
+        const poll = { ...plain, question: { kind: 'yes_no' } };
+        assert.ok(isPendingFor(poll, { seenAt: NOW }, NOW));
+        assert.ok(!isPendingFor(poll, { answeredAt: NOW }, NOW));
+        assert.ok(!isPendingFor({ ...poll, closesAt: new Date(NOW.getTime() - 1000) }, null, NOW), 'a closed poll stops asking');
+        assert.ok(!isPendingFor({ ...plain, createdAt: new Date(NOW.getTime() - 40 * 864e5) }, null, NOW), 'old popups stop');
+    });
+    test('after answers, choices can be added at the end but not changed', () => {
+        const old = { kind: 'single', options: ['A', 'B'] };
+        assert.equal(questionChangeRefusal(old, { kind: 'single', options: ['A', 'B', 'C'] }, 3), null);
+        assert.ok(questionChangeRefusal(old, { kind: 'single', options: ['B', 'A'] }, 3));
+        assert.ok(questionChangeRefusal(old, { kind: 'number' }, 1));
+        assert.equal(questionChangeRefusal(old, { kind: 'number' }, 0), null);
+    });
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  Summary
 // ═════════════════════════════════════════════════════════════════════════════
