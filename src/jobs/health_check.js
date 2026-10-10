@@ -51,6 +51,7 @@ const DEEP_HOUR = parseInt(process.env.HEALTH_DEEP_HOUR_IST || '7', 10);
 const STATE_KINDS = new Set([
     'tracker_silent_on_duty', 'duplicate_day', 'open_day_past', 'needs_review_day', 'bad_day_shape',
     'stale_device_report', 'tracking_blockers', 'old_apk', 'stale_corrections',
+    'location_check_blocked',
 ]);
 // Kinds produced only by the daily deep pass; an hourly run must not close them.
 const DEEP_KINDS = new Set(['tracking_gaps', 'gps_jumps']);
@@ -395,6 +396,51 @@ async function runHealthCheck(now = new Date(), { dryRun = false, deep } = {}) {
                 detail: `The oldest was sent on ${istDateKey(r.oldest)}. Until they are decided, those days are paid on the original punches.`,
                 evidence: { count: r.n, oldest: r.oldest },
             });
+        }
+    });
+
+    // 15. Location required, but there is nothing to check it against.
+    //     No branch at all: the app refuses every punch-in. Every branch with
+    //     its location check switched off: this release lets them punch
+    //     unchecked, but the previous release (app 1.2, still in use at some
+    //     companies) refuses punch-in, lunch AND punch-out ("G-BRANCH"), so the
+    //     person cannot even close their day. Found live on 10 Oct.
+    await run('location_check_blocked', async () => {
+        const settings = await Settings.find({}).select('adminId attendance.requireLocation').lean();
+        const companyRequires = new Map(settings.map((s) => [String(s.adminId), s.attendance?.requireLocation === true]));
+        const people = await User.find({ role: 'employee', status: 'active' })
+            .select('name adminId branchId branchIds attendanceExceptions')
+            .populate('branchId', 'geoFenceEnabled').populate('branchIds', 'geoFenceEnabled').lean();
+        const byCompany = new Map();
+        for (const p of people) {
+            const x = p.attendanceExceptions || {};
+            const requires = x.overrideGlobal ? x.requireLocation === true : companyRequires.get(String(p.adminId)) === true;
+            if (!requires) continue;
+            const assigned = [p.branchId, ...(p.branchIds || [])].filter(Boolean);
+            const kind = assigned.length === 0 ? 'none' : (assigned.every((b) => b.geoFenceEnabled === false) ? 'off' : null);
+            if (!kind) continue;
+            const k = String(p.adminId);
+            if (!byCompany.has(k)) byCompany.set(k, { none: [], off: [] });
+            byCompany.get(k)[kind].push(p.name ? p.name.trim() : 'Employee');
+        }
+        for (const [adminId, g] of byCompany) {
+            const list = (names) => names.slice(0, 8).join(', ') + (names.length > 8 ? ` and ${names.length - 8} more` : '');
+            if (g.none.length) {
+                add({
+                    kind: 'location_check_blocked', severity: 'high', adminId, employeeId: null, dayKey: null, ref: 'no-branch',
+                    title: `${g.none.length} employee(s) must give a location but have no branch, so they cannot punch in`,
+                    detail: `${list(g.none)}. Give them a branch, or turn off "Require location" (company Settings → Geofencing, or the employee's own Attendance Exceptions).`,
+                    evidence: { names: g.none },
+                });
+            }
+            if (g.off.length) {
+                add({
+                    kind: 'location_check_blocked', severity: 'medium', adminId, employeeId: null, dayKey: null, ref: 'fence-off',
+                    title: `${g.off.length} employee(s) must give a location but every branch they belong to has location checking off`,
+                    detail: `${list(g.off)}. The current app lets them punch without a check; on the old app (1.2) every punch-in, lunch and punch-out is refused. Turn off "Require location", or switch the branch check back on with the branch's real location.`,
+                    evidence: { names: g.off },
+                });
+            }
         }
     });
 

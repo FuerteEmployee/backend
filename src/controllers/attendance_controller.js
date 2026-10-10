@@ -336,7 +336,7 @@ function istTime12(date) {
  * Distance is computed whether or not the fence is enforced -- it is evidence.
  * `requireLocation` governs only the refusal.
  */
-function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch, requireFix = false }) {
+function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunch, requireFix = false, closing = false }) {
     // Two different lists, because "has no branch" and "has a branch that is
     // not fenced" are opposite situations that this function used to conflate.
     //
@@ -385,7 +385,17 @@ function evaluateGeofence({ user, settings, rules, location, isWFH, isDevicePunc
         // Refuse ONLY when there is genuinely nothing to measure against. If a
         // branch is assigned and its fence is simply switched off, that is a
         // deliberate exemption and the punch is allowed through unmeasured.
+        //
+        // Even then, only a punch-IN is refused. Punch-out and lunch (`closing`)
+        // go through: a settings problem must never trap someone inside a day
+        // they cannot end -- that left the 04:00 job to close it at shift end,
+        // and the person locked out of lunch, for something only the admin can
+        // fix. Logged so it is visible; Super admin -> Health flags the setup.
         if (assigned.length === 0) {
+            if (closing) {
+                console.warn(`[geofence] ${user?._id}: location required but no branch assigned; closing punch allowed unchecked`);
+                return { distance: null, reject: null };
+            }
             return { distance: null, reject: { message: 'No branch assigned. Cannot verify location.' } };
         }
         return { distance: null, reject: null };
@@ -988,7 +998,7 @@ exports.punchOut = async (req, res) => {
 
         const outGeo = evaluateGeofence({
             user, settings, rules, location,
-            isWFH: attendance.isWFH, isDevicePunch: req.isDevicePunch, requireFix: true,
+            isWFH: attendance.isWFH, isDevicePunch: req.isDevicePunch, requireFix: true, closing: true,
         });
         if (outGeo.reject) return res.status(400).json(outGeo.reject);
         const punchOutDistance = outGeo.distance;
@@ -1199,7 +1209,7 @@ exports.lunchIn = async (req, res) => {
         const lunchInGeo = evaluateGeofence({
             user, settings, rules, location,
             isWFH: attendance.isWFH || attendance.remarks === 'Work From Home',
-            isDevicePunch: req.isDevicePunch,
+            isDevicePunch: req.isDevicePunch, closing: true,
         });
         if (lunchInGeo.reject) return res.status(400).json(lunchInGeo.reject);
         const lunchInDistance = lunchInGeo.distance;
@@ -1306,7 +1316,7 @@ exports.lunchOut = async (req, res) => {
         const lunchOutGeo = evaluateGeofence({
             user, settings, rules, location,
             isWFH: attendance.isWFH || attendance.remarks === 'Work From Home',
-            isDevicePunch: req.isDevicePunch,
+            isDevicePunch: req.isDevicePunch, closing: true,
         });
         if (lunchOutGeo.reject) return res.status(400).json(lunchOutGeo.reject);
         const lunchOutDistance = lunchOutGeo.distance;
