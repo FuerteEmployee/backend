@@ -133,9 +133,14 @@ function fixedEventsFromRow(attendance, taps) {
     const events = [];
 
     const reproducible = (s, end, si) => {
-        if (s[end === 'in' ? 'punchInTapId' : 'punchOutTapId']) return true;
+        // The source decides first: an end an admin edited, a correction
+        // approved, or a job closed is theirs from then on, even though it
+        // still carries the tap id of the reading it replaced. Checking the
+        // tap id alone let the next tap undo an admin's correction (10 Oct,
+        // qa/channel-matrix/edits-survive.cjs).
         const source = s[end === 'in' ? 'punchInSource' : 'punchOutSource'];
         if (!TAP_SOURCES.has(source)) return false;
+        if (s[end === 'in' ? 'punchInTapId' : 'punchOutTapId']) return true;
         return end === 'in' ? (si === 0 && owned.has('punchIn')) : (si === lastIdx && owned.has('punchOut'));
     };
 
