@@ -28,6 +28,7 @@ const allowedOrigins = [
     "https://localhost:8000",
     "http://localhost:10000",
     "https://localhost:10000",
+    "https://stagingbotlens.beontimeofficial.com", // the staging kiosk (talks to the staging API)
     "https://botlens.beontimeofficial.com",
 
     // Capacitor native apps (Android/iOS WebView origins)
