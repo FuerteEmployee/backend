@@ -58,23 +58,52 @@ function sendError(res, err, where) {
  */
 exports.createKiosk = async (req, res) => {
     try {
-        const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-        if (!name || name.length > 60) {
-            return res.status(400).json({ message: 'Give this kiosk a name of up to 60 letters, for example "Reception".' });
+        const adminId = oid(req.adminId);
+        // Signing in again on a tablet (a cleared browser, a private window)
+        // used to add a new kiosk every time. Now the admin picks the existing
+        // one (kioskId), and typing an existing kiosk's name reuses it too.
+        let kiosk = null;
+        let created = false;
+        if (req.body?.kioskId !== undefined) {
+            if (!isId(req.body.kioskId)) return res.status(400).json({ message: 'Unknown kiosk.' });
+            kiosk = await LensKiosk.findOne({ _id: oid(req.body.kioskId), adminId, revokedAt: null });
+            if (!kiosk) return res.status(404).json({ message: 'That kiosk is switched off or no longer exists. Give this one a name instead.' });
+        } else {
+            const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+            if (!name || name.length > 60) {
+                return res.status(400).json({ message: 'Give this kiosk a name of up to 60 letters, for example "Reception".' });
+            }
+            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            kiosk = await LensKiosk.findOne({ adminId, revokedAt: null, name: new RegExp(`^${escaped}$`, 'i') });
+            if (!kiosk) {
+                const active = await LensKiosk.countDocuments({ adminId, revokedAt: null });
+                if (active >= MAX_KIOSKS_PER_COMPANY) {
+                    return res.status(409).json({ message: `Your company already has ${MAX_KIOSKS_PER_COMPANY} kiosks. Pick one of them, or switch one off first.` });
+                }
+                kiosk = await LensKiosk.create({ adminId, name, createdBy: req.userId });
+                created = true;
+            }
         }
-        const active = await LensKiosk.countDocuments({ adminId: oid(req.adminId), revokedAt: null });
-        if (active >= MAX_KIOSKS_PER_COMPANY) {
-            return res.status(409).json({ message: `Your company already has ${MAX_KIOSKS_PER_COMPANY} kiosks. Switch one off first.` });
-        }
-        const kiosk = await LensKiosk.create({ adminId: oid(req.adminId), name, createdBy: req.userId });
+        if (!created) await LensKiosk.updateOne({ _id: kiosk._id }, { $set: { lastSeenAt: new Date() } });
         const key = jwt.sign(
             { scope: 'lens', kioskId: String(kiosk._id), adminId: String(req.adminId) },
             process.env.JWT_SECRET,
             { expiresIn: `${KIOSK_KEY_DAYS}d` },
         );
-        res.status(201).json({ key, kiosk: { _id: kiosk._id, name: kiosk.name }, expiresInDays: KIOSK_KEY_DAYS });
+        res.status(created ? 201 : 200).json({ key, kiosk: { _id: kiosk._id, name: kiosk.name }, reused: !created, expiresInDays: KIOSK_KEY_DAYS });
     } catch (err) {
         sendError(res, err, 'createKiosk');
+    }
+};
+
+/** GET /api/lens/kiosks -- this company's kiosks that are on, for the sign-in step on a tablet. */
+exports.listKiosksForSetup = async (req, res) => {
+    try {
+        const kiosks = await LensKiosk.find({ adminId: oid(req.adminId), revokedAt: null })
+            .sort({ lastSeenAt: -1, createdAt: -1 }).select('name lastSeenAt createdAt').lean();
+        res.json(kiosks.map((k) => ({ _id: k._id, name: k.name, lastSeenAt: k.lastSeenAt || null, createdAt: k.createdAt })));
+    } catch (err) {
+        sendError(res, err, 'listKiosksForSetup');
     }
 };
 

@@ -8,6 +8,7 @@ const lens = require('../controllers/lens_controller');
 
 // 1. The admin, signed in on the kiosk, creating it. Their own token.
 router.post('/kiosks', protect, adminOnly, checkSubscription, checkModuleAccess('attendance'), lens.createKiosk);
+router.get('/kiosks', protect, adminOnly, checkSubscription, checkModuleAccess('attendance'), lens.listKiosksForSetup);
 
 // 2. The admin panel. Same page and permission as the fingerprint machines.
 const panel = [protect, panelOnly, checkSubscription];
