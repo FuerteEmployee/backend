@@ -55,6 +55,11 @@ const GeofenceAuditSchema = new mongoose.Schema({
             // that an engine which logs only its closures cannot be shown to be
             // working, because silence is indistinguishable from broken.
             'marginal_window_too_short',
+            // The deciding fixes disagree with each other (added to evaluateExit
+            // on 1 Oct, missing here until 12 Oct, so those audit writes failed):
+            // one of them is inside a fence, or two of them imply an impossible speed.
+            'mixed_positions',
+            'implausible_jump',
             // outside the fence, but not yet confirmed across enough rounds
             'confirming',
             // suppressed -- a rule says do not act, regardless of evidence

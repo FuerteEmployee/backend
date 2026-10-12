@@ -379,4 +379,4 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
     return attendance;
 }
 
-module.exports = { derive, actionForIndex, debounceMs, reconcileDay, DEFAULT_DEBOUNCE_SECONDS, istDateKey };
+module.exports = { derive, actionForIndex, debounceMs, reconcileDay, fixedEventsFromRow, DEFAULT_DEBOUNCE_SECONDS, istDateKey };

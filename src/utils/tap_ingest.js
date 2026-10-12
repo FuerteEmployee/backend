@@ -13,7 +13,7 @@ const Attendance = require('../models/Attendance');
 const Settings = require('../models/Settings');
 const PunchLog = require('../models/PunchLog');
 const punchReconcile = require('./punch_reconcile');
-const { istDateKey } = require('./attendance_helpers');
+const { istDateKey, istStartOfDay } = require('./attendance_helpers');
 const { workDayKey, lateOutDayStart } = require('./working_day');
 
 /**
@@ -36,11 +36,43 @@ async function tapDayKey(adminId, employeeId, tapTime) {
 }
 
 /**
+ * The phone/admin/job punch on this day closest to `tapTime`, if it is inside
+ * `gap`; else null.
+ *
+ * The double-tap window used to be measured between taps only. Someone who
+ * punched in on the phone and then walked past the face kiosk 40 s later got a
+ * 40-second day (the face became the punch-out), and a face seen 30 s after
+ * "Start Lunch" on the phone ended lunch there and then. The phone already
+ * refuses its own punches that close to the last one (workMinGapSeconds,
+ * lunchMinGapSeconds); this is the same rule for the machine and the kiosk.
+ * A held tap that lands just BEFORE a phone punch is the same person punching
+ * twice, so the distance is absolute.
+ */
+async function nearFixedPunch(adminId, employeeId, dayKey, tapTime, gap) {
+    const [y, m, d] = dayKey.split('-').map(Number);
+    const dayStart = istStartOfDay(new Date(Date.UTC(y, m - 1, d, 12)));
+    const row = await Attendance.findOne({ adminId, employeeId, date: dayStart }).lean();
+    if (!row) return null;
+    // Passing this tap lets a 04:00 shift-end placeholder give way to it, as
+    // the rebuild would: that close is not a punch anyone made.
+    const { events } = punchReconcile.fixedEventsFromRow(row, [{ deviceTime: tapTime }]);
+    let best = null;
+    for (const e of events) {
+        const dist = Math.abs(tapTime - e.at);
+        if (dist < gap && (!best || dist < best.dist)) best = { at: e.at, action: e.action, dist };
+    }
+    return best;
+}
+
+/**
  * Store one tap and rebuild the day.
  *
- * Two rejections, both of which still store the tap rather than dropping it, so
+ * Three rejections, all of which still store the tap rather than dropping it, so
  * "I tapped and it didn't count" is answerable from the data:
  *  - `debounced` -- inside the company's double-tap window (punchDebounceSeconds)
+ *    of another machine/face tap
+ *  - `near_punch` -- inside that same window of a phone, admin or job punch on
+ *    that day (see nearFixedPunch)
  *  - `duplicate` -- the unique {serialNumber, pin, deviceTime} index caught a
  *    resent tap. Durable across restarts, so a machine re-pushing its buffer or
  *    a kiosk retrying a tap can never count it twice.
@@ -85,6 +117,20 @@ async function recordTap({ adminId, employeeId, tapTime, source, serialNumber, p
                 if (err.code !== 11000) throw err;
             });
             return { recorded: false, reason: 'debounced', tapTime, dayKey, lastTapTime: new Date(last.deviceTime) };
+        }
+    }
+
+    if (gap > 0) {
+        const near = await nearFixedPunch(adminId, employeeId, dayKey, tapTime, gap);
+        if (near) {
+            await PunchLog.create({
+                adminId, employeeId, dayKey, deviceTime: tapTime,
+                serialNumber, pin: String(pin), source, score,
+                discarded: true, discardReason: 'near_punch',
+            }).catch((err) => {
+                if (err.code !== 11000) throw err;
+            });
+            return { recorded: false, reason: 'near_punch', tapTime, dayKey, lastTapTime: near.at, nearAction: near.action };
         }
     }
 

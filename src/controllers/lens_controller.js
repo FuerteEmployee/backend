@@ -276,9 +276,23 @@ exports.deleteFace = async (req, res) => {
 };
 
 // Plain words for what a tap did, shown on the kiosk.
-function tapMessage(action, at, day, reason) {
+const DONE_WORDS = {
+    'punch-in': 'punched in',
+    'punch-out': 'punched out',
+    'lunch-in': 'started lunch',
+    'lunch-out': 'came back from lunch',
+};
+
+function tapMessage(action, at, day, reason, extra = {}) {
     const t = istHHMM(at);
-    if (reason === 'debounced') return 'Already recorded. Please wait a moment.';
+    const next = extra.nextAt ? ` Next punch after ${istHHMM(extra.nextAt)}.` : '';
+    if (reason === 'debounced') {
+        return extra.lastTapTime ? `Already recorded at ${istHHMM(extra.lastTapTime)}.${next}` : 'Already recorded. Please wait a moment.';
+    }
+    if (reason === 'near_punch') {
+        const did = DONE_WORDS[extra.nearAction] || 'punched';
+        return `You already ${did} at ${istHHMM(extra.lastTapTime)}.${next}`;
+    }
     if (reason === 'duplicate') return 'Already recorded.';
     switch (action) {
         case 'punch-in': return `Punched in at ${t}`;
@@ -336,8 +350,12 @@ exports.recordSighting = async (req, res) => {
 
         const action = outcome.recorded ? (mine?.derivedAction || null) : null;
         let retryAfterSec = 0;
-        if (outcome.reason === 'debounced' && outcome.lastTapTime) {
-            retryAfterSec = Math.max(1, Math.ceil((new Date(outcome.lastTapTime).getTime() + debounceMs(settings) - now) / 1000));
+        let nextAt = null;
+        // Same window after another tap (`debounced`) or after a phone punch
+        // (`near_punch`): the kiosk waits that long before sending this person again.
+        if ((outcome.reason === 'debounced' || outcome.reason === 'near_punch') && outcome.lastTapTime) {
+            nextAt = new Date(new Date(outcome.lastTapTime).getTime() + debounceMs(settings));
+            retryAfterSec = Math.max(1, Math.ceil((nextAt.getTime() - now) / 1000));
         }
         const open = !!(day && day.punchIn && (!day.punchOut || day.punchOutIsProvisional));
 
@@ -356,7 +374,9 @@ exports.recordSighting = async (req, res) => {
                 onDuty: open,
             } : null,
             retryAfterSec,
-            message: tapMessage(action, tapTime, day, outcome.recorded ? null : outcome.reason),
+            message: tapMessage(action, tapTime, day, outcome.recorded ? null : outcome.reason, {
+                lastTapTime: outcome.lastTapTime, nearAction: outcome.nearAction, nextAt,
+            }),
         });
     } catch (err) {
         sendError(res, err, 'recordSighting');

@@ -39,11 +39,12 @@ const PunchLogSchema = new mongoose.Schema({
 
     // Set when the tap was rejected rather than counted. 'debounced' is the
     // common one: a second tap within the configured window, i.e. somebody
-    // pressed twice by mistake.
+    // pressed twice by mistake. 'near_punch' is the same window measured from
+    // a phone/admin punch on that day (utils/tap_ingest.js).
     discarded: { type: Boolean, default: false },
     discardReason: {
         type: String,
-        enum: [null, 'debounced', 'sequence_complete', 'handler_rejected'],
+        enum: [null, 'debounced', 'near_punch', 'sequence_complete', 'handler_rejected'],
         default: null,
     },
 
