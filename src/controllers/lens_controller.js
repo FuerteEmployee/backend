@@ -37,6 +37,13 @@ const MAX_KIOSKS_PER_COMPANY = 20;
 
 const oid = (v) => new mongoose.Types.ObjectId(String(v));
 const isId = (v) => mongoose.isValidObjectId(v);
+// Fewer scan angles than this and a face is shown as needing a rescan: the old
+// kiosk's imported faces have 1, a full 360-degree scan has 7.
+const GOOD_FACE_ANGLES = 4;
+const faceAngles = (adminId, extra = {}) => FaceProfile.aggregate([
+    { $match: { adminId: oid(adminId), ...extra } },
+    { $project: { employeeId: 1, thumbnailUrl: 1, updatedAt: 1, createdAt: 1, kioskId: 1, createdBy: 1, angles: { $size: { $ifNull: ['$embeddings', []] } } } },
+]);
 // Employees that count: of this company, not switched off.
 const activeEmployee = (adminId) => ({ adminId: oid(adminId), role: 'employee', status: { $ne: 'inactive' } });
 
@@ -137,12 +144,15 @@ exports.listEmployees = async (req, res) => {
     try {
         const [people, faces] = await Promise.all([
             User.find(activeEmployee(req.adminId)).select('name').sort({ name: 1 }).lean(),
-            FaceProfile.find({ adminId: oid(req.adminId) }).select('employeeId thumbnailUrl updatedAt').lean(),
+            faceAngles(req.adminId),
         ]);
         const byEmp = new Map(faces.map((f) => [String(f.employeeId), f]));
         res.json(people.map((p) => {
             const f = byEmp.get(String(p._id));
-            return { _id: p._id, name: p.name, hasFace: !!f, thumbnailUrl: f?.thumbnailUrl || null, faceUpdatedAt: f?.updatedAt || null };
+            return {
+                _id: p._id, name: p.name, hasFace: !!f, thumbnailUrl: f?.thumbnailUrl || null, faceUpdatedAt: f?.updatedAt || null,
+                angles: f ? f.angles : 0, needsRescan: !!f && f.angles < GOOD_FACE_ANGLES,
+            };
         }));
     } catch (err) {
         sendError(res, err, 'listEmployees');
@@ -444,11 +454,27 @@ exports.activity = async (req, res) => {
 exports.adminListKiosks = async (req, res) => {
     try {
         const kiosks = await LensKiosk.find({ adminId: oid(req.adminId) }).sort({ revokedAt: 1, createdAt: -1 }).lean();
-        const people = await User.find({ _id: { $in: kiosks.map((k) => k.createdBy).filter(Boolean) } }).select('name').lean();
+        const since = istStartOfDay(new Date());
+        const [people, punches, faces] = await Promise.all([
+            User.find({ _id: { $in: kiosks.map((k) => k.createdBy).filter(Boolean) } }).select('name').lean(),
+            // Face punches counted today by each kiosk (a kiosk's taps carry serial LENS-<kioskId>).
+            PunchLog.aggregate([
+                { $match: { adminId: oid(req.adminId), source: 'lens', deviceTime: { $gte: since }, discarded: { $ne: true } } },
+                { $group: { _id: '$serialNumber', n: { $sum: 1 } } },
+            ]),
+            FaceProfile.aggregate([
+                { $match: { adminId: oid(req.adminId), kioskId: { $ne: null } } },
+                { $group: { _id: '$kioskId', n: { $sum: 1 } } },
+            ]),
+        ]);
         const names = new Map(people.map((p) => [String(p._id), p.name]));
+        const today = new Map(punches.map((x) => [String(x._id), x.n]));
+        const registered = new Map(faces.map((x) => [String(x._id), x.n]));
         res.json(kiosks.map((k) => ({
             _id: k._id, name: k.name, createdAt: k.createdAt, lastSeenAt: k.lastSeenAt,
             revokedAt: k.revokedAt, createdBy: names.get(String(k.createdBy)) || null,
+            punchesToday: today.get(`LENS-${k._id}`) || 0,
+            facesRegistered: registered.get(String(k._id)) || 0,
         })));
     } catch (err) {
         sendError(res, err, 'adminListKiosks');
@@ -474,9 +500,7 @@ exports.adminRevokeKiosk = async (req, res) => {
 /** GET /api/lens/admin/faces -- who is registered, when, from which kiosk. */
 exports.adminListFaces = async (req, res) => {
     try {
-        const faces = await FaceProfile.find({ adminId: oid(req.adminId) })
-            .select('employeeId thumbnailUrl createdAt updatedAt kioskId createdBy')
-            .sort({ updatedAt: -1 }).lean();
+        const faces = (await faceAngles(req.adminId)).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
         const [people, kiosks] = await Promise.all([
             User.find({ _id: { $in: faces.map((f) => f.employeeId) } }).select('name status').lean(),
             LensKiosk.find({ _id: { $in: faces.map((f) => f.kioskId).filter(Boolean) } }).select('name').lean(),
@@ -491,6 +515,8 @@ exports.adminListFaces = async (req, res) => {
             registeredAt: f.createdAt,
             updatedAt: f.updatedAt,
             kiosk: kmap.get(String(f.kioskId)) || null,
+            angles: f.angles,
+            needsRescan: f.angles < GOOD_FACE_ANGLES,
         })));
     } catch (err) {
         sendError(res, err, 'adminListFaces');
