@@ -47,6 +47,27 @@ const faceAngles = (adminId, extra = {}) => FaceProfile.aggregate([
 // Employees that count: of this company, not switched off.
 const activeEmployee = (adminId) => ({ adminId: oid(adminId), role: 'employee', status: { $ne: 'inactive' } });
 
+/**
+ * The faces "version" kiosks compare to decide whether to reload faces: how
+ * many faces of ACTIVE employees there are, plus the newest change. It used to
+ * be the newest change only, so removing a face that was not the newest (or
+ * switching an employee off) left it unchanged and every kiosk kept matching
+ * that person until it restarted; and /me and /faces computed it over
+ * different sets, so they could disagree for good and a kiosk reloaded faces
+ * on every frame. Both now use this one function.
+ */
+function versionOf(faces) {
+    const latest = faces.reduce((m, f) => Math.max(m, new Date(f.updatedAt).getTime()), 0);
+    return faces.length ? `${faces.length}-${new Date(latest).toISOString()}` : null;
+}
+
+async function activeFacesSummary(adminId) {
+    const people = await User.find(activeEmployee(adminId)).select('_id').lean();
+    const faces = await FaceProfile.find({ adminId: oid(adminId), employeeId: { $in: people.map((p) => p._id) } })
+        .select('updatedAt').lean();
+    return versionOf(faces);
+}
+
 function sendError(res, err, where) {
     if (err && err.name === 'ValidationError') {
         const first = Object.values(err.errors || {})[0];
@@ -120,13 +141,13 @@ exports.listKiosksForSetup = async (req, res) => {
 exports.me = async (req, res) => {
     try {
         const [latest, settings] = await Promise.all([
-            FaceProfile.findOne({ adminId: oid(req.adminId) }).sort({ updatedAt: -1 }).select('updatedAt').lean(),
+            activeFacesSummary(req.adminId),
             Settings.findOne({ adminId: oid(req.adminId) }).select('attendance.punchDebounceSeconds').lean(),
         ]);
         res.json({
             company: { _id: req.adminId, name: req.kioskAdmin?.companyName || req.kioskAdmin?.name || '' },
             kiosk: { _id: req.kioskId, name: req.kiosk?.name || '' },
-            facesVersion: latest ? new Date(latest.updatedAt).toISOString() : null,
+            facesVersion: latest,
             today: istDateKey(new Date()),
             serverTime: new Date().toISOString(),
             repeatSeconds: Math.round(debounceMs(settings) / 1000),
@@ -171,9 +192,9 @@ exports.listFaces = async (req, res) => {
         const faces = await FaceProfile.find({ adminId: oid(req.adminId), employeeId: { $in: people.map((p) => p._id) } })
             .select('employeeId embeddings modelVersion updatedAt')
             .lean();
-        const latest = faces.reduce((m, f) => Math.max(m, new Date(f.updatedAt).getTime()), 0);
+
         res.json({
-            version: latest ? new Date(latest).toISOString() : null,
+            version: versionOf(faces),
             faces: faces.map((f) => ({
                 employeeId: f.employeeId,
                 name: names.get(String(f.employeeId)) || '',
@@ -365,7 +386,9 @@ exports.recordSighting = async (req, res) => {
 
         const now = Date.now();
         const sent = req.body?.tapTime ? new Date(req.body.tapTime) : null;
-        const tapTime = sent && !Number.isNaN(sent.getTime()) && sent.getTime() <= now + 60 * 1000 && sent.getTime() >= now - 24 * 3600 * 1000
+        // Up to 7 days old: a kiosk's outbox can hold a sighting through a long
+        // outage, and its real time matters (same limit as a machine's clock).
+        const tapTime = sent && !Number.isNaN(sent.getTime()) && sent.getTime() <= now + 60 * 1000 && sent.getTime() >= now - 7 * 24 * 3600 * 1000
             ? sent
             : new Date(now);
         const score = Number.isFinite(Number(req.body?.score)) ? Math.max(0, Math.min(1, Number(req.body.score))) : null;
@@ -445,6 +468,38 @@ exports.activity = async (req, res) => {
         })));
     } catch (err) {
         sendError(res, err, 'activity');
+    }
+};
+
+/**
+ * GET /api/lens/on-duty -- who is at work right now, for the kiosk's "On duty"
+ * list: everyone of this company with an open session today (or since a night
+ * shift that started yesterday), from ANY channel -- phone, machine or camera.
+ * The kiosk used to work this out from its last 50 face taps, so a phone
+ * punch-out never removed anyone, and on a busy day the morning's punch-ins
+ * fell out of the 50 and those people vanished.
+ */
+exports.onDuty = async (req, res) => {
+    try {
+        const today = istStartOfDay(new Date());
+        const yesterday = new Date(today.getTime() - 24 * 3600 * 1000);
+        const rows = await Attendance.find({ adminId: oid(req.adminId), date: { $gte: yesterday }, punchIn: { $ne: null }, punchOut: null })
+            .select('employeeId punchIn shifts').lean();
+        const people = await User.find({ _id: { $in: rows.map((r) => r.employeeId) }, ...activeEmployee(req.adminId) }).select('name').lean();
+        const names = new Map(people.map((p) => [String(p._id), p.name]));
+        const seen = new Set();
+        const out = [];
+        for (const r of rows) {
+            const id = String(r.employeeId);
+            if (!names.has(id) || seen.has(id)) continue;
+            seen.add(id);
+            const open = (r.shifts || []).filter((s) => s.punchIn && !s.punchOut).pop();
+            out.push({ employeeId: r.employeeId, name: names.get(id), since: open?.punchIn || r.punchIn });
+        }
+        out.sort((a, b) => new Date(b.since) - new Date(a.since));
+        res.json(out);
+    } catch (err) {
+        sendError(res, err, 'onDuty');
     }
 };
 

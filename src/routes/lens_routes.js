@@ -28,5 +28,6 @@ router.put('/faces/:employeeId', ...kiosk, lens.requireEnrollGrant, lens.saveFac
 router.delete('/faces/:employeeId', ...kiosk, lens.requireEnrollGrant, lens.deleteFace);
 router.post('/taps', ...kiosk, lens.recordSighting);
 router.get('/activity', ...kiosk, lens.activity);
+router.get('/on-duty', ...kiosk, lens.onDuty);
 
 module.exports = router;
