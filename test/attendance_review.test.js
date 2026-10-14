@@ -223,6 +223,33 @@ test('full shift -> present', () => {
     assert.equal(gradeDay(att, SHIFT_9_18, SETTINGS), 'present');
 });
 
+// Ayush, 12 Oct 2026: 09:00-18:00, lunch from punches, 5 + 5 min grace. In at
+// 09:04, lunch 12:30-12:55, out at 18:44 = 8h30m counted. Without a stated
+// full day the bar was the whole span less grace (8h50m), so any real break
+// made the day a half day.
+{
+    const AYUSH = { startTime: '09:00', endTime: '18:00', halfDayLatePunchInMin: 5, halfDayEarlyPunchOutMin: 5, lunch: { mode: 'from_punches', maxMins: 160 } };
+    const ist = (h, m) => new Date(Date.UTC(2026, 8, 10, h - 5, m - 30));
+    const day = (inH, inM, outH, outM, lunch) => ({
+        ...mkAttendance(ist(inH, inM), ist(outH, outM)),
+        lunchInTime: lunch ? ist(...lunch[0]) : null,
+        lunchOutTime: lunch ? ist(...lunch[1]) : null,
+    });
+    test('full day hours: no setting keeps the old bar (8h50m)', () => {
+        assert.equal(requiredWorkMs(AYUSH, SETTINGS, ist(9, 0)), (9 * 60 - 10) * 60000);
+        assert.equal(gradeDay(day(9, 4, 18, 44, [[12, 30], [12, 55]]), AYUSH, SETTINGS), 'half-day');
+    });
+    test('full day hours: 8h set -> bar 7h50m, 12 Oct is a full day', () => {
+        const s = { ...AYUSH, fullDayMins: 480 };
+        assert.equal(requiredWorkMs(s, SETTINGS, ist(9, 0)), (8 * 60 - 10) * 60000);
+        assert.equal(gradeDay(day(9, 4, 18, 44, [[12, 30], [12, 55]]), s, SETTINGS), 'present');
+        assert.equal(gradeDay(day(9, 16, 17, 30, null), s, SETTINGS), 'present');     // 13 Oct, 8h14m
+        assert.equal(gradeDay(day(9, 0, 16, 45, null), s, SETTINGS), 'half-day');    // 7h45m
+        assert.equal(gradeDay(day(9, 5, 17, 25, [[13, 0], [13, 30]]), s, SETTINGS), 'present');  // 7h50m exactly
+        assert.equal(gradeDay(day(9, 5, 17, 24, [[13, 0], [13, 30]]), s, SETTINGS), 'half-day'); // 7h49m
+    });
+}
+
 test('short day -> half-day', () => {
     const pIn = Date.UTC(2026, 8, 10, 3, 30);
     const pOut = Date.UTC(2026, 8, 10, 7, 30); // 13:00 IST

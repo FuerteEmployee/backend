@@ -543,7 +543,9 @@ function requiredWorkMs(shift, settings, referenceDate = new Date()) {
     // three Full Days.
     const { inMs, outMs } = resolveGraceMs(shift, settings);
 
-    const required = spanMs - lunchMs - inMs - outMs;
+    // A shift may state its Full Day hours outright; the graces still apply.
+    const fullDayMs = Number(shift?.fullDayMins) > 0 ? Number(shift.fullDayMins) * 60 * 1000 : null;
+    const required = (fullDayMs !== null ? fullDayMs : spanMs - lunchMs) - inMs - outMs;
     // Misconfigured shift only — lunch and grace together exceed the shift.
     if (required <= 0) return Math.min(spanMs, 30 * 60 * 1000);
     return required;
