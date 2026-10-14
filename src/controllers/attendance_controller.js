@@ -21,6 +21,7 @@ const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock')
 const { isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
 const { lateArrival } = require('../utils/late_arrival');
 const { rebuildAfterAppPunch } = require('../utils/tap_ingest');
+const { checkPunchFace } = require('../utils/punch_face_check');
 
 // A day field the person just set in the app is theirs, not a reading of a
 // machine or face tap: take it off the list the day rebuild treats as its own
@@ -111,6 +112,12 @@ async function resolvePunchPhoto(req, photo, action) {
             message: `A photo is required to ${action}. Please allow camera access and try again.`,
         };
     }
+
+    // The selfie must be the employee's own face when they have registered one
+    // (see punch_face_check.js). Checked before the upload, so a refused punch
+    // stores nothing.
+    const faceCheck = await checkPunchFace(req, photo, action);
+    if (!faceCheck.ok) return faceCheck;
 
     try {
         return { ok: true, url: await uploadToCloudinary(photo) };

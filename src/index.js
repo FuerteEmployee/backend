@@ -11,6 +11,12 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
     app.listen(PORT, () => {
         console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 
+        // Load the face models now, so the first app punch with a registered
+        // face is not the one that waits for them (utils/face_match.js).
+        require("./utils/face_match").warmUp()
+            .then(() => console.log("[face] punch face check ready"))
+            .catch((err) => console.error("[face] face models not ready; punches by registered faces will be refused until they are:", err.message));
+
         // Connect to Database in background
         connectDB()
             .then(() => {

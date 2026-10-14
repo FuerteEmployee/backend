@@ -85,3 +85,6 @@ apks/
 # Live credentials. Each environment keeps its own copy on disk;
 # the committed one leaked production secrets into a public repo.
 .env
+
+# Face models for the app punch face check (utils/face_match.js), downloaded on first use.
+/models/
