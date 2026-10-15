@@ -9,6 +9,15 @@ const ShiftSchema = new mongoose.Schema({
     endTime: { type: String, required: true },   // e.g., '18:00'
     halfDayLatePunchInMin: { type: Number, default: 0, min: 0 },
     halfDayEarlyPunchOutMin: { type: Number, default: 0, min: 0 },
+    // A punch-in MORE than this many minutes after the shift start is a Half
+    // Day outright, whatever hours follow. 0 = off. Separate from the late grace
+    // above, which only decides the Late badge.
+    halfDayLateAfterMin: { type: Number, default: 0, min: 0 },
+    // Net hours below which a day is a Half Day, for this shift. 0 = off: the bar
+    // is then built from the shift's span, lunch and grace (requiredWorkMs).
+    // When set it replaces that bar, so arriving late is shown as Late but only
+    // a short day costs half a day's pay.
+    halfDayMinHours: { type: Number, default: 0, min: 0, max: 24 },
     // Per-shift working-days override. null/unset = no override, falls back to
     // the employee's own weeklyHolidays, then the tenant-wide
     // settings.attendance.workDays default (see isWeeklyOff).

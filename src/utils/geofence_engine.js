@@ -53,7 +53,7 @@ const {
     evaluateExit, isFieldRole, WINDOW_MS, GEOFENCE_CONFIRMATIONS, MIN_CONFIRMATION_SPAN_MS,
     GEOFENCE_UNAMBIGUOUS_FACTOR, GEOFENCE_PENDING_STALE_MS,
 } = require('./geofence_window');
-const { istStartOfDay, istEndOfDay, istDateKey } = require('./attendance_helpers');
+const { istStartOfDay, istEndOfDay, istDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks } = require('./attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, allSessions, syncRootPunchOut, MAX_SESSIONS } = require('./shift_status');
 const { isTrustworthyFix, nearestBranchDistance } = require('./distance');
 const { isTenantFeatureEnabled } = require('./feature_toggles');
@@ -579,10 +579,49 @@ async function closeSession({ attendance, user, settings, openIdx, now, verdict 
         s.grossMs = computeSessionGrossMs(s);
     }
 
-    // Same grading the manual path applies, and only ever downgrading.
+    // Punctuality survives the close, as in the manual punch-out: the Late badge
+    // reads `status === 'late' || wasLate`, so an auto exit that regrades the day
+    // must still record that the arrival was late.
+    if (
+        attendance.status === 'late' || attendance.status === 'half-day' ||
+        (user.shiftId && isLatePunchIn(attendance.punchIn, user.shiftId, settings))
+    ) {
+        attendance.wasLate = true;
+    }
+
+    // The configurable half-day rules, exactly as the manual punch-out applies
+    // them (shift grace bar, or the tenant's time/duration rules). The status is
+    // normalised here: a 'late' arrival becomes present/half-day and the fact
+    // lives on in wasLate. This path used to skip it and only downgrade
+    // 'present', which left a late arrival who worked short hours stored as
+    // plain "Late" (full pay) while the same hours closed by hand were Half Day.
+    const { status: finalStatus, remarksAppend } = determineHalfDayStatus({
+        punchIn: attendance.punchIn,
+        punchOut: attendance.punchOut,
+        totalWorkMs: attendance.totalWorkMs,
+        lunchInTime: attendance.lunchInTime,
+        lunchOutTime: attendance.lunchOutTime,
+        isWFH: attendance.isWFH,
+        shift: user.shiftId,
+    }, settings);
+
+    attendance.status = finalStatus;
+    // Rebuilt, not appended, as in the manual path: the grading fragments
+    // describe the day as it stands now.
+    attendance.remarks = stripGradingRemarks(attendance.remarks);
+    if (finalStatus === 'half-day' && remarksAppend) {
+        attendance.remarks = (attendance.remarks || '') + remarksAppend;
+    }
+
+    // Hours across ALL sessions, which the shift-rule check cannot see. Only
+    // ever downgrades, same as manual.
     const grade = gradeDay(attendance, user.shiftId, settings);
     if (grade === 'half-day' && attendance.status === 'present') {
         attendance.status = 'half-day';
+        const hoursNote = ' | Short hours across sessions';
+        if (!String(attendance.remarks || '').includes(hoursNote.trim())) {
+            attendance.remarks = (attendance.remarks || '') + hoursNote;
+        }
     }
     if (grade === 'absent') attendance.status = 'absent';
 
@@ -612,6 +651,19 @@ async function closeSession({ attendance, user, settings, openIdx, now, verdict 
         distanceFromBranch: verdict.evidence.distanceM,
         closeReason: 'auto_geofence',
     });
+
+    // Re-sync the month's salary, as the manual punch-out does, so a day this
+    // engine closed pays the same as one a person closed. Fire-and-forget and
+    // lazily required: salary_controller sits above this module in the graph.
+    try {
+        const { calculateAndSaveSalary } = require('../controllers/salary_controller');
+        const { istCalendarDate } = require('./attendance_helpers');
+        const payMonth = istCalendarDate(attendance.date || closeAt);
+        calculateAndSaveSalary(attendance.adminId, user, payMonth.getMonth() + 1, payMonth.getFullYear())
+            .catch((err) => console.error('Salary Sync Error (auto punch-out):', err));
+    } catch (err) {
+        console.error('Salary Sync Error (auto punch-out):', err);
+    }
 
     return { at: closeAt };
 }

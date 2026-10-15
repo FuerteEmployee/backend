@@ -520,6 +520,10 @@ function requiredWorkMs(shift, settings, referenceDate = new Date()) {
     const ref = referenceDate instanceof Date && !Number.isNaN(referenceDate.getTime())
         ? referenceDate
         : new Date();
+    // An explicit per-shift minimum replaces the span-based bar below. Late
+    // arrival is then only a punctuality flag; the day is short only under this.
+    const explicitHours = Number(shift?.halfDayMinHours);
+    if (Number.isFinite(explicitHours) && explicitHours > 0) return explicitHours * 60 * 60 * 1000;
     const startMs = shiftTimeOnDate(shift?.startTime, ref);
     let endMs = shiftTimeOnDate(shift?.endTime, ref);
     if (startMs === null || endMs === null) return null; // no shift: cannot grade on hours
@@ -593,6 +597,10 @@ function gradeDay(attendance, shift, settings) {
     // employees currently have no shift -- so say plainly that it could not be
     // graded instead of pretending it passed.
     if (required === null) return 'needs_review';
+
+    // An arrival past the shift's half-day line is a Half Day whatever the hours.
+    const { isHalfDayLateArrival } = require('./attendance_helpers');
+    if (isHalfDayLateArrival(sessions[0]?.punchIn || attendance?.punchIn, shift)) return 'half-day';
 
     return workedMs >= required ? 'present' : 'half-day';
 }

@@ -143,6 +143,18 @@ function readShiftInput(body = {}, { partial = false } = {}) {
         data[key] = m.value;
     }
 
+    if (has('halfDayLateAfterMin')) {
+        const m = readMinutes(body.halfDayLateAfterMin, 'Half Day after late arrival');
+        if (m.error) return { error: m.error };
+        data.halfDayLateAfterMin = m.value;
+    }
+
+    if (has('halfDayMinHours')) {
+        const h = body.halfDayMinHours === '' || body.halfDayMinHours === null ? 0 : Number(body.halfDayMinHours);
+        if (!Number.isFinite(h) || h < 0 || h > 24) return { error: 'Minimum hours for a Full Day must be between 0 and 24 (0 turns it off).' };
+        data.halfDayMinHours = Math.round(h * 100) / 100;
+    }
+
     if (has('workDays')) {
         if (body.workDays === null) {
             data.workDays = null; // no override: the company's work days apply

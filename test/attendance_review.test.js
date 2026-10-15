@@ -1517,6 +1517,62 @@ section('Notice board: questions, audience, popups');
 // ═════════════════════════════════════════════════════════════════════════════
 
 // The lock tests are asynchronous, so they run here, one after another, before the totals.
+// ── Per-shift minimum hours (halfDayMinHours): Late is a flag, Half Day is hours ──
+const { determineHalfDayStatus: gradeHalf } = require('../src/utils/attendance_helpers');
+const MIN6_SHIFT = { startTime: '09:30', endTime: '18:30', halfDayLatePunchInMin: 10, halfDayEarlyPunchOutMin: 5, halfDayMinHours: 6, lunch: { mode: 'inherit' } };
+const MIN6_SETTINGS = { attendance: { minLunch: 60 } };
+const mkMin6Day = (inH, inM, outH, outM) => {
+    const pIn = new Date(T(inH, inM)), pOut = new Date(T(outH, outM));
+    return { date: new Date(SEP16_IST_MIDNIGHT), punchIn: pIn, punchOut: pOut, shifts: [{ punchIn: pIn, punchOut: pOut }] };
+};
+
+test('halfDayMinHours: 09:46 arrival working 7h44m is Late but a Full Day', () => {
+    const att = mkMin6Day(9, 46, 18, 30);
+    assert.equal(isLatePunchIn(att.punchIn, MIN6_SHIFT, MIN6_SETTINGS), true);
+    assert.equal(gradeDay(att, MIN6_SHIFT, MIN6_SETTINGS), 'present');
+    const r = gradeHalf({ punchIn: att.punchIn, punchOut: att.punchOut, totalWorkMs: computeWorkedMs(att, MIN6_SHIFT, MIN6_SETTINGS), shift: MIN6_SHIFT }, MIN6_SETTINGS);
+    assert.equal(r.status, 'present');
+});
+
+test('halfDayMinHours: 09:40 is on time, 09:41 is late (10 min grace)', () => {
+    assert.equal(isLatePunchIn(new Date(T(9, 40)), MIN6_SHIFT, MIN6_SETTINGS), false);
+    assert.equal(isLatePunchIn(new Date(T(9, 41)), MIN6_SHIFT, MIN6_SETTINGS), true);
+});
+
+test('halfDayMinHours: under 6 net hours is a Half Day, and still Late', () => {
+    const att = mkMin6Day(9, 46, 15, 30); // 5h44m - 1h lunch = 4h44m
+    assert.equal(gradeDay(att, MIN6_SHIFT, MIN6_SETTINGS), 'half-day');
+    assert.equal(requiredWorkMs(MIN6_SHIFT, MIN6_SETTINGS, att.punchIn), 6 * 3600000);
+});
+
+const LATE1H_SHIFT = { ...MIN6_SHIFT, halfDayLateAfterMin: 60 };
+
+test('halfDayLateAfterMin: 1h00m exactly is still on the line, 1h01m is a Half Day', () => {
+    const { isHalfDayLateArrival } = require('../src/utils/attendance_helpers');
+    assert.equal(isHalfDayLateArrival(new Date(T(10, 30)), LATE1H_SHIFT), false);
+    assert.equal(isHalfDayLateArrival(new Date(T(10, 31)), LATE1H_SHIFT), true);
+    assert.equal(isHalfDayLateArrival(new Date(T(10, 31)), MIN6_SHIFT), false); // rule off
+});
+
+test('halfDayLateAfterMin: 10:45 arrival is a Half Day even with a full day of hours', () => {
+    const att = mkMin6Day(10, 45, 18, 30); // 7h45m - 1h = 6h45m, over the 6h bar
+    assert.equal(gradeDay(att, LATE1H_SHIFT, MIN6_SETTINGS), 'half-day');
+    const r = gradeHalf({ punchIn: att.punchIn, punchOut: att.punchOut, totalWorkMs: computeWorkedMs(att, LATE1H_SHIFT, MIN6_SETTINGS), shift: LATE1H_SHIFT }, MIN6_SETTINGS);
+    assert.equal(r.status, 'half-day');
+    assert.match(r.remarksAppend, /Late arrival over 60 min/);
+    assert.equal(isLatePunchIn(att.punchIn, LATE1H_SHIFT, MIN6_SETTINGS), true);
+});
+
+test('halfDayLateAfterMin: 10:00 arrival with full hours stays Present (Late only)', () => {
+    const att = mkMin6Day(10, 0, 18, 30);
+    assert.equal(gradeDay(att, LATE1H_SHIFT, MIN6_SETTINGS), 'present');
+});
+
+test('halfDayMinHours off (0) leaves the span-based bar untouched', () => {
+    const shift = { ...MIN6_SHIFT, halfDayMinHours: 0, halfDayLatePunchInMin: 5 };
+    assert.equal(requiredWorkMs(shift, MIN6_SETTINGS, new Date(T(9, 46))), 7 * 3600000 + 50 * 60000);
+});
+
 (async () => {
     for (const t of asyncTests) {
         try {

@@ -247,6 +247,21 @@ const isLatePunchIn = (punchInDate, shift, settings) => {
 };
 
 /**
+ * Did the arrival pass the shift's "this much late is a Half Day" line?
+ * Strictly after start + halfDayLateAfterMin (exactly 1h late is still on the
+ * line, 1h00m01s is over it). False when the rule is off or there is no start.
+ */
+const isHalfDayLateArrival = (punchInDate, shift) => {
+  const limit = Number(shift?.halfDayLateAfterMin);
+  if (!(limit > 0) || !shift?.startTime || !punchInDate) return false;
+  const occ = istShiftOccurrence(shift, punchInDate);
+  const cutoff = occ
+    ? new Date(occ.start.getTime() + limit * 60 * 1000)
+    : istTimeOnDate(shift.startTime, punchInDate, limit);
+  return !!cutoff && new Date(punchInDate) > cutoff;
+};
+
+/**
  * Applies the configurable half-day rules (time-based / duration-based / both)
  * to decide the final attendance status for a completed day. Shared by the
  * live punch-out flow and regularization approval so both paths agree.
@@ -299,7 +314,7 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   // staying five minutes longer now costs nothing, which is what an admin
   // setting "5 minutes' grace" believes they have configured.
   let hasShiftRules = false;
-  if (shift && (shift.halfDayLatePunchInMin || shift.halfDayEarlyPunchOutMin)) {
+  if (shift && (shift.halfDayLatePunchInMin || shift.halfDayEarlyPunchOutMin || shift.halfDayMinHours > 0 || shift.halfDayLateAfterMin > 0)) {
     hasShiftRules = true;
 
     const requiredMs = requiredWorkMs(shift, settings, punchIn ? new Date(punchIn) : new Date());
@@ -313,6 +328,14 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
       if (isHalfDay) {
         const fmt = (ms) => `${Math.floor(ms / 3600000)}h ${String(Math.round((ms % 3600000) / 60000)).padStart(2, '0')}m`;
         remarkParts.push(`Short hours for shift (${fmt(netWorkMs)} of ${fmt(requiredMs)})`);
+      }
+
+      // Unlike the cut-off below, this one IS a verdict: the shift says an
+      // arrival this late is a Half Day however long the person then stays.
+      if (isHalfDayLateArrival(punchIn, shift)) {
+        isHalfDay = true;
+        const lateLimit = istTimeOnDate(shift.startTime, punchIn, shift.halfDayLateAfterMin);
+        remarkParts.push(`Late arrival over ${shift.halfDayLateAfterMin} min${lateLimit ? ` (after ${istHHMM(lateLimit)})` : ''}`);
       }
 
       // Kept as context, never as a verdict. An admin looking at a half-day
@@ -409,6 +432,7 @@ const GRADING_REMARK_PATTERNS = [
   /^Late punch-in for shift \(/i,
   /^Early punch-out for shift \(/i,
   /^Late arrival \(after /i,
+  /^Late arrival over /i,
   /^Short hours \(/i,
   /^Short hours across sessions$/i,
 ];
@@ -507,4 +531,4 @@ const parseDeviceTimestamp = (raw, now = new Date(), offsetMinutes = 0) => {
   return parsed;
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, parseIstWallClock, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, istMonthRange, istTimeOnDate, istShiftOccurrence, istMinutesOfDay, istSecondsOfMinute, istHHMM, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };
+module.exports = { isHalfDayLateArrival, DAY_LABELS, isWeeklyOff, toLocalDateKey, parseIstWallClock, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, istMonthRange, istTimeOnDate, istShiftOccurrence, istMinutesOfDay, istSecondsOfMinute, istHHMM, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };
