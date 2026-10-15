@@ -155,6 +155,12 @@ function readShiftInput(body = {}, { partial = false } = {}) {
         data.halfDayMinHours = Math.round(h * 100) / 100;
     }
 
+    if (has('fullDayMins')) {
+        const f = readMinutes(body.fullDayMins, 'Hours for a full day', { allowNull: true });
+        if (f.error) return { error: f.error };
+        data.fullDayMins = f.value > 0 ? f.value : null; // blank or 0: worked out from the shift
+    }
+
     if (has('workDays')) {
         if (body.workDays === null) {
             data.workDays = null; // no override: the company's work days apply
@@ -214,6 +220,11 @@ function crossCheck(shift) {
     const graceOut = Math.max(0, Number(shift.halfDayEarlyPunchOutMin) || 0);
     if (graceIn + graceOut + lunchMins >= span) {
         return `Late grace, early grace and lunch add up to ${fmtMins(graceIn + graceOut + lunchMins)}, which leaves no working time in this ${fmtMins(span)} shift. Lower them.`;
+    }
+    const fullDay = Number(shift.fullDayMins) || 0;
+    if (fullDay > 0) {
+        if (fullDay > span) return `Hours for a full day (${fmtMins(fullDay)}) cannot be more than the shift (${fmtMins(span)}).`;
+        if (graceIn + graceOut >= fullDay) return `Late and early grace (${fmtMins(graceIn + graceOut)}) must be less than the hours for a full day (${fmtMins(fullDay)}).`;
     }
     return null;
 }

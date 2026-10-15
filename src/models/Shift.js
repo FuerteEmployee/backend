@@ -18,6 +18,12 @@ const ShiftSchema = new mongoose.Schema({
     // When set it replaces that bar, so arriving late is shown as Late but only
     // a short day costs half a day's pay.
     halfDayMinHours: { type: Number, default: 0, min: 0, max: 24 },
+    // Hours needed for a Full Day, in minutes, before the two graces above are
+    // taken off. null = worked out from the shift (span - scheduled lunch). Set
+    // it when the shift's lunch is taken from punches: that mode schedules no
+    // lunch, so the bar would otherwise be the whole span and any real break
+    // made the day a half day (Ayush, 12 Oct: 9h14m at work, graded half).
+    fullDayMins: { type: Number, default: null, min: 0 },
     // Per-shift working-days override. null/unset = no override, falls back to
     // the employee's own weeklyHolidays, then the tenant-wide
     // settings.attendance.workDays default (see isWeeklyOff).

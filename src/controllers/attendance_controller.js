@@ -1404,7 +1404,7 @@ exports.getReports = async (req, res) => {
                 populate: [
                     // The grading fields ride along so `grading` below can be
                     // computed from the same shift the server grades with.
-                    { path: 'shiftId', select: 'name startTime endTime halfDayLatePunchInMin halfDayEarlyPunchOutMin halfDayMinHours halfDayLateAfterMin lunch workDays' },
+                    { path: 'shiftId', select: 'name startTime endTime halfDayLatePunchInMin halfDayEarlyPunchOutMin halfDayMinHours halfDayLateAfterMin fullDayMins lunch workDays' },
                     { path: 'branchId', select: 'branchName city' },
                 ],
             }).lean(),
