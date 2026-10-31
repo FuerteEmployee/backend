@@ -56,7 +56,7 @@ const {
 const { istStartOfDay, istEndOfDay, istDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks } = require('./attendance_helpers');
 const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, allSessions, syncRootPunchOut, MAX_SESSIONS, dropLateOnFlexible } = require('./shift_status');
 const { isTrustworthyFix, nearestBranchDistance } = require('./distance');
-const { isTenantFeatureEnabled } = require('./feature_toggles');
+const { isCompanyFeatureOn } = require('./feature_toggles');
 const { logAttendanceEvent } = require('./attendance_event_logger');
 const { sendAutoPunchOutNotice } = require('../jobs/notify');
 
@@ -226,13 +226,20 @@ async function clearConfirmation(adminId, employeeId) {
  * @returns {Object} the decision, for logging/tests
  */
 async function evaluateEmployee({ adminId, employeeId, now = new Date(), force = false }) {
+    // A company the super admin has not switched auto punch-out on for (off by
+    // default, a paid add-on) is not evaluated at all: no reads, no audit row.
+    // Shadow evidence is only worth its cost for a company that has it, and
+    // the promotion gate counts only what is gathered after it is switched on.
+    if (!(await isCompanyFeatureOn(adminId, 'geofenceAutoPunchOut'))) {
+        return { skipped: true, reason: 'feature_off' };
+    }
+
     const dayKey = istDateKey(now);
     const base = { adminId, employeeId, dayKey };
 
-    const [user, settings, featureAllowed] = await Promise.all([
+    const [user, settings] = await Promise.all([
         User.findById(employeeId).populate('shiftId branchId branchIds departmentId').lean(),
         Settings.findOne({ adminId }).lean(),
-        isTenantFeatureEnabled(adminId, 'geofenceAutoPunchOut'),
     ]);
 
     if (!user) return { decision: 'suppressed', reason: 'not_punched_in' };
@@ -255,11 +262,12 @@ async function evaluateEmployee({ adminId, employeeId, now = new Date(), force =
     // faith shadow mode exists to avoid. Evaluation must never be gated on
     // the same flag that gates the act; only the act may be.
     //
-    // The super admin's per-tenant feature switch sits above all of that: when
-    // it is off, nothing -- not the tenant's own config, not `force` -- may arm
-    // the engine. It drops to shadow rather than returning early, for the same
-    // reason as above: only the act is gated, never the evaluation.
-    const armed = featureAllowed && (force || (cfg.enabled === true && cfg.shadowMode === false));
+    // The super admin's per-tenant feature switch sits above all of that, and
+    // is checked at the top: a company without it is not evaluated at all
+    // (owner, 31 Oct 2026: shadow runs for companies that never bought the
+    // feature were pure server load). Within a company that has it, the rule
+    // above holds: only the act is gated, never the evaluation.
+    const armed = force || (cfg.enabled === true && cfg.shadowMode === false);
     const shadow = !armed;
 
     // Field staff are exempt: their job IS being away from the branch, and
@@ -713,6 +721,11 @@ async function replayEmployee({ adminId, employeeId, from, to }) {
     const startMs = new Date(from).getTime();
     const endMs = new Date(to).getTime();
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+        return { steps: 0, closed: false, reopened: false };
+    }
+
+    // Same switch as evaluateEmployee: skip the whole replay, not each step.
+    if (!(await isCompanyFeatureOn(adminId, 'geofenceAutoPunchOut'))) {
         return { steps: 0, closed: false, reopened: false };
     }
 

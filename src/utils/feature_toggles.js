@@ -17,12 +17,17 @@
 // phones are told not to track (profile, /attendance/today, ping-check) and
 // any fix still sent is dropped (tracking_controller.isTrackingAllowed).
 //
+// Auto punch-out on leaving the branch is OFF by default too (owner, same
+// day): no company has bought or armed it in production. Off means the
+// geofence engine does not evaluate at all for that company -- no reads, no
+// audit rows -- rather than running in shadow on every fix.
+//
 // No model is required at the top level: Subscription.js requires this file
 // for its schema default, so a top-level require back would be a load cycle.
 
 const FEATURE_TOGGLE_DEFAULTS = Object.freeze({
     tracking: false,
-    geofenceAutoPunchOut: true,
+    geofenceAutoPunchOut: false,
     leads: true,
     expenses: true,
     advanceSalary: true,
@@ -61,22 +66,25 @@ async function isTenantFeatureEnabled(adminId, key) {
 }
 
 /**
- * Has the super admin switched live GPS tracking on for this company?
+ * Has the super admin switched this paid feature on for the company?
  *
- * Cached for 30 s per company, like the per-employee tracking check: every
- * tracked phone asks on every fix. A switch flipped in Super admin is
- * therefore picked up within half a minute, without a restart.
+ * Cached for 30 s per company and feature: tracking phones ask on every fix.
+ * A switch flipped in Super admin is therefore picked up within half a
+ * minute, without a restart.
  */
-const companyTrackingCache = new Map();
-async function isCompanyTrackingOn(adminId) {
+const companyFeatureCache = new Map();
+async function isCompanyFeatureOn(adminId, key) {
     if (!adminId) return false;
-    const key = String(adminId);
-    const hit = companyTrackingCache.get(key);
+    const cacheKey = `${String(adminId)}:${key}`;
+    const hit = companyFeatureCache.get(cacheKey);
     if (hit && Date.now() - hit.at < 30 * 1000) return hit.on;
-    const on = (await getTenantFeatureToggles(adminId)).tracking === true;
-    companyTrackingCache.set(key, { on, at: Date.now() });
+    const on = (await getTenantFeatureToggles(adminId))[key] === true;
+    companyFeatureCache.set(cacheKey, { on, at: Date.now() });
     return on;
 }
+
+/** Live GPS tracking (see the note at the top). */
+const isCompanyTrackingOn = (adminId) => isCompanyFeatureOn(adminId, 'tracking');
 
 /**
  * Route gate: refuse the admin panel's use of a feature the super admin has
@@ -116,6 +124,7 @@ module.exports = {
     resolveFeatureToggles,
     getTenantFeatureToggles,
     isTenantFeatureEnabled,
+    isCompanyFeatureOn,
     isCompanyTrackingOn,
     checkFeatureToggle,
 };
