@@ -13,6 +13,7 @@ const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const mongoose = require('mongoose');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
 const { istStartOfDay, istEndOfDay, istDateKey, isFlexibleShift } = require('../utils/attendance_helpers');
+const { isCompanyTrackingOn } = require('../utils/feature_toggles');
 const { isFrozenUser, sendFrozen } = require('../utils/frozen_tenants');
 
 /**
@@ -665,8 +666,13 @@ exports.getProfile = async (req, res) => {
         // OR, not AND: sixteen employees were enabled individually before the
         // department field existed, and requiring both would have switched every
         // one of them off silently the moment this shipped.
-        userObj.trackingEnabled = user.trackingEnabled === true
-            || user.departmentId?.trackingEnabled === true;
+        //
+        // And only when the super admin has switched live GPS tracking on for
+        // the company (off by default, a paid add-on): otherwise the phone is
+        // never asked to track and never shows the tracking setup screens.
+        const companyTracking = await isCompanyTrackingOn(user.adminId);
+        userObj.trackingEnabled = companyTracking && (user.trackingEnabled === true
+            || user.departmentId?.trackingEnabled === true);
 
         // When tracking runs: 'on_duty' (punch-in to punch-out) or 'always'. The
         // app shows it to the employee in words, so they know which applies.
@@ -675,6 +681,7 @@ exports.getProfile = async (req, res) => {
         // Surfaced so the app can explain WHY it is tracking, rather than the
         // employee discovering a location icon with no account of it.
         userObj.trackingPolicy = {
+            companyEnabled: companyTracking,
             fromEmployee: user.trackingEnabled === true,
             fromDepartment: user.departmentId?.trackingEnabled === true,
             departmentName: user.departmentId?.name || null,

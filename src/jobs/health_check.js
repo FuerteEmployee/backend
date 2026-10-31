@@ -17,6 +17,8 @@ const { calculateDistance, isTrustworthyFix } = require('../utils/distance');
 const { MAX_PLAUSIBLE_SPEED_MPS } = require('../utils/geofence_window');
 const { istDateKey, istStartOfDay } = require('../utils/attendance_helpers');
 const { isFrozenTenant } = require('../utils/frozen_tenants');
+const Subscription = require('../models/Subscription');
+const { resolveFeatureToggles } = require('../utils/feature_toggles');
 
 // The health check: looks through recent real data for the patterns behind
 // every bug real phones found on staging, so they reach the super admin's
@@ -158,7 +160,12 @@ async function runHealthCheck(now = new Date(), { dryRun = false, deep } = {}) {
     const employees = await User.find({ role: 'employee', status: 'active' })
         .select('name adminId trackingEnabled departmentId branchId').populate('branchId', 'branchName latitude longitude radius').lean();
     const empById = new Map(employees.map((e) => [String(e._id), e]));
-    const isTracked = (e) => e && (e.trackingEnabled === true || trackedDepts.has(String(e.departmentId)));
+    // Only in companies the super admin has switched live GPS tracking on for
+    // (off by default): elsewhere a silent phone is the point, not a fault.
+    const trackingCompanies = new Set((await Subscription.find({}).select('adminId featureToggles').lean())
+        .filter((s) => resolveFeatureToggles(s.featureToggles).tracking === true).map((s) => String(s.adminId)));
+    const isTracked = (e) => e && trackingCompanies.has(String(e.adminId))
+        && (e.trackingEnabled === true || trackedDepts.has(String(e.departmentId)));
     const alwaysTenants = new Set((await Settings.find({ 'attendance.trackingMode': 'always' }).select('adminId').lean()).map((s) => String(s.adminId)));
     // Names for everyone, including people since switched off: a duplicate
     // day from August may belong to someone no longer active.

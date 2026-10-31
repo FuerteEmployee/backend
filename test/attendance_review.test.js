@@ -737,17 +737,22 @@ test('no branches -> suppressed (no_branch)', () => {
 
 const { resolveFeatureToggles, FEATURE_TOGGLE_DEFAULTS } = require('../src/utils/feature_toggles');
 
-test('feature toggles: a tenant with nothing stored gets every shipped feature', () => {
+test('feature toggles: a tenant with nothing stored gets every shipped feature except live GPS tracking', () => {
     const t = resolveFeatureToggles(undefined);
-    for (const key of ['tracking', 'leads', 'expenses', 'advanceSalary', 'announcements', 'biometricDevices', 'assets', 'geofenceAutoPunchOut']) {
+    for (const key of ['leads', 'expenses', 'advanceSalary', 'announcements', 'biometricDevices', 'assets', 'geofenceAutoPunchOut']) {
         assert.equal(t[key], true, `${key} should default on`);
     }
+    // Live GPS tracking is a paid add-on (owner, 31 Oct): off until the super
+    // admin switches it on for a company that bought it.
+    assert.equal(t.tracking, false, 'tracking should default off');
 });
 
 test('feature toggles: stored choices win, from a Map or a lean() object', () => {
     assert.equal(resolveFeatureToggles(new Map([['assets', false]])).assets, false);
     assert.equal(resolveFeatureToggles({ leads: false }).leads, false);
-    assert.equal(resolveFeatureToggles({ leads: false }).tracking, true);
+    assert.equal(resolveFeatureToggles({ leads: false }).tracking, false);
+    assert.equal(resolveFeatureToggles({ tracking: true }).tracking, true, 'switched on by the super admin');
+    assert.equal(resolveFeatureToggles(new Map([['tracking', true]])).tracking, true);
 });
 
 test('feature toggles: unknown or non-boolean stored values are ignored', () => {

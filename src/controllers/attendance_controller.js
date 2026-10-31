@@ -17,6 +17,7 @@ const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istMonthRange, istTimeOnDate, applyPunchRounding } = require('../utils/attendance_helpers');
 const { istCalendarDate, parseIstWallClock, istHHMM, isFlexibleShift } = require('../utils/attendance_helpers');
 const { findWorkingDay, FLEX_LATE_OUT_MS } = require('../utils/working_day');
+const { isCompanyTrackingOn } = require('../utils/feature_toggles');
 const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock');
 const { isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
 const { lateArrival } = require('../utils/late_arrival');
@@ -771,8 +772,11 @@ exports.getToday = async (req, res) => {
         // when this endpoint shows no open session; `trackAlways` tells it not to.
         // Only when the company chose "always" AND this person's tracking is on,
         // so switching someone's tracking off still stops their phone.
+        // Never when the company does not have live GPS tracking (super admin
+        // switch, off by default).
         const trackAlways = trackingSettings?.attendance?.trackingMode === 'always'
-            && (me?.trackingEnabled === true || me?.departmentId?.trackingEnabled === true);
+            && (me?.trackingEnabled === true || me?.departmentId?.trackingEnabled === true)
+            && await isCompanyTrackingOn(req.adminId);
         const { row: attendance } = await findWorkingDay({
             Attendance,
             adminId: new mongoose.Types.ObjectId(req.adminId),

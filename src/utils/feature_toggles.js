@@ -10,11 +10,18 @@
 // because none of them has a toggle row yet (this is what happened to Assets).
 // The five dormant modules have no page behind them, so OFF costs nothing.
 //
+// Live GPS tracking is the deliberate exception (owner, 31 Oct 2026): it is a
+// paid add-on nobody has bought, yet every tracked phone kept posting a fix
+// every ~45 s into the server and the database. OFF by default for every
+// company; the super admin switches it on for one that buys it. Off means the
+// phones are told not to track (profile, /attendance/today, ping-check) and
+// any fix still sent is dropped (tracking_controller.isTrackingAllowed).
+//
 // No model is required at the top level: Subscription.js requires this file
 // for its schema default, so a top-level require back would be a load cycle.
 
 const FEATURE_TOGGLE_DEFAULTS = Object.freeze({
-    tracking: true,
+    tracking: false,
     geofenceAutoPunchOut: true,
     leads: true,
     expenses: true,
@@ -51,6 +58,24 @@ async function getTenantFeatureToggles(adminId) {
 async function isTenantFeatureEnabled(adminId, key) {
     const toggles = await getTenantFeatureToggles(adminId);
     return toggles[key] !== false;
+}
+
+/**
+ * Has the super admin switched live GPS tracking on for this company?
+ *
+ * Cached for 30 s per company, like the per-employee tracking check: every
+ * tracked phone asks on every fix. A switch flipped in Super admin is
+ * therefore picked up within half a minute, without a restart.
+ */
+const companyTrackingCache = new Map();
+async function isCompanyTrackingOn(adminId) {
+    if (!adminId) return false;
+    const key = String(adminId);
+    const hit = companyTrackingCache.get(key);
+    if (hit && Date.now() - hit.at < 30 * 1000) return hit.on;
+    const on = (await getTenantFeatureToggles(adminId)).tracking === true;
+    companyTrackingCache.set(key, { on, at: Date.now() });
+    return on;
 }
 
 /**
@@ -91,5 +116,6 @@ module.exports = {
     resolveFeatureToggles,
     getTenantFeatureToggles,
     isTenantFeatureEnabled,
+    isCompanyTrackingOn,
     checkFeatureToggle,
 };

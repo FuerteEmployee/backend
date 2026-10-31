@@ -7,6 +7,7 @@ const { istStartOfDay, istEndOfDay } = require('../utils/attendance_helpers');
 const { evaluateEmployee, replayEmployee } = require('../utils/geofence_engine');
 const { MAX_FIX_AGE_MS } = require('../utils/geofence_window');
 const { smoothTrack } = require('../utils/track_smoothing');
+const { isCompanyTrackingOn } = require('../utils/feature_toggles');
 
 // A device is only ever trusted to report its own position — employeeId
 // comes from the authenticated token, never the request body (the body used
@@ -41,12 +42,14 @@ async function isTrackingAllowed(employeeId) {
 
     const u = await User.findById(employeeId)
         .populate('departmentId', 'trackingEnabled')
-        .select('trackingEnabled departmentId')
+        .select('trackingEnabled departmentId adminId')
         .lean();
 
     // An employee who cannot be loaded is not tracked. Failing closed is the
-    // safe direction for a consent check.
-    const allowed = !!u && (u.trackingEnabled === true || u.departmentId?.trackingEnabled === true);
+    // safe direction for a consent check. The company must also have live GPS
+    // tracking switched on by the super admin (off by default: a paid add-on).
+    const allowed = !!u && (u.trackingEnabled === true || u.departmentId?.trackingEnabled === true)
+        && await isCompanyTrackingOn(u.adminId);
     trackingAllowedCache.set(key, { allowed, at: Date.now() });
     return allowed;
 }
