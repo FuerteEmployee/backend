@@ -449,7 +449,12 @@ exports.getLatestLocations = async (req, res) => {
     try {
         const locations = await Tracking.aggregate([
             { $match: { adminId: new mongoose.Types.ObjectId(req.adminId) } },
-            { $sort: { timestamp: -1 } },
+            // Sorted in the order of the { adminId, employeeId, timestamp: -1 }
+            // index, so MongoDB reads the index in order instead of sorting
+            // every point of the company in memory. A plain { timestamp: -1 }
+            // sort hit the 32 MB in-memory limit once the company had ~390k
+            // points (90 days of "always" tracking) and the page got a 500.
+            { $sort: { adminId: 1, employeeId: 1, timestamp: -1 } },
             {
                 $group: {
                     _id: '$employeeId',
