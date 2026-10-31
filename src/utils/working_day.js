@@ -1,4 +1,4 @@
-const { istStartOfDay, istEndOfDay, istDateKey, istShiftOccurrence } = require('./attendance_helpers');
+const { istStartOfDay, istEndOfDay, istDateKey, istShiftOccurrence, isFlexibleShift } = require('./attendance_helpers');
 const { isDayOpen, DAY_MS } = require('./shift_status');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,6 +58,37 @@ function lateOutDayStart(shift, at = new Date()) {
     return istStartOfDay(new Date(prevStart));
 }
 
+/**
+ * How long after midnight a FLEXIBLE day shift's still-open day takes its
+ * punch-out. Ends at 04:00 by default, when the nightly job closes forgotten
+ * punch-outs, so the two never fight over the same session.
+ */
+const FLEX_LATE_OUT_MS = Math.max(0, Number(process.env.FLEXIBLE_LATE_OUT_HOURS) || 4) * 60 * 60 * 1000;
+
+/**
+ * Yesterday's day start when a punch at `at` may close yesterday's open
+ * session on a flexible DAY shift, or null.
+ *
+ * A flexible shift keeps punch-in open after its usual end, so someone can
+ * start at 19:00 and finish at 01:00. Without this the 01:00 punch-out looked
+ * for a row on the new day, found none ("No punch-in record found for today"),
+ * and the 04:00 job then closed the evening at its own punch-in: 0 hours.
+ *
+ * Only for the app path, and only when that day is really still open (the
+ * caller checks): a machine tap at 05:50 must not become yesterday's punch-out.
+ * Never once today's own shift has started. Night shifts keep lateOutDayStart.
+ */
+function flexibleCarryDayStart(shift, at = new Date()) {
+    if (!isFlexibleShift(shift)) return null;
+    const occ = istShiftOccurrence(shift, at);
+    if (!occ || occ.overnight) return null;
+    const t = new Date(at).getTime();
+    const todayStart = istStartOfDay(at).getTime();
+    if (t - todayStart >= FLEX_LATE_OUT_MS) return null;
+    if (t >= occ.start.getTime()) return null;
+    return istStartOfDay(new Date(todayStart - 1));
+}
+
 function sameDay(a, b) {
     return !!a && !!b && istDateKey(a) === istDateKey(b);
 }
@@ -107,6 +138,14 @@ async function findWorkingDay({ Attendance, adminId, employeeId, shift, now = ne
         if (stillOpen(prev)) return { row: prev, primary, dayStart };
     }
 
+    // Just after midnight on a flexible day shift: yesterday's session, if one
+    // is genuinely still open (not a machine's provisional punch-out).
+    const flexCarry = flexibleCarryDayStart(shift, now);
+    if (flexCarry) {
+        const prev = await rowOn(Attendance, adminId, employeeId, flexCarry, opts);
+        if (prev && isDayOpen(prev)) return { row: prev, primary, dayStart };
+    }
+
     // A night-shift row opened after midnight by the code before this fix is
     // dated the calendar day rather than the night it belongs to. Honour it
     // while it is open, so nobody is stranded mid-shift across the deploy.
@@ -119,4 +158,4 @@ async function findWorkingDay({ Attendance, adminId, employeeId, shift, now = ne
     return { row: primary, primary, dayStart };
 }
 
-module.exports = { findWorkingDay, workDayStart, workDayKey, lateOutDayStart, LATE_OUT_MARGIN_MS };
+module.exports = { findWorkingDay, workDayStart, workDayKey, lateOutDayStart, LATE_OUT_MARGIN_MS, flexibleCarryDayStart, FLEX_LATE_OUT_MS };

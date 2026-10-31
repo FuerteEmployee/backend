@@ -2,7 +2,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Settings = require('../models/Settings');
 const { istStartOfDay, istEndOfDay, istDateKey, istShiftOccurrence } = require('../utils/attendance_helpers');
-const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, shiftTimeOnDate, syncRootPunchOut } = require('../utils/shift_status');
+const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, shiftTimeOnDate, syncRootPunchOut, dropLateOnFlexible } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 const { excludeFrozen } = require('../utils/frozen_tenants');
 
@@ -205,6 +205,7 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false, employe
         // arrival who forgot to punch out kept full pay on short hours. The
         // lateness itself survives in wasLate, the flag payroll reads.
         const grade = gradeDay(attendance, user.shiftId, settings);
+        dropLateOnFlexible(attendance, user.shiftId); // nobody is Late on a flexible shift
         if (attendance.status === 'late') attendance.wasLate = true;
         if (grade === 'half-day' && (attendance.status === 'present' || attendance.status === 'late')) attendance.status = 'half-day';
         if (grade === 'absent') attendance.status = 'absent';

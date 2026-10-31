@@ -85,7 +85,10 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     const otMultiplier = settings?.attendance?.otMultiplier ?? 1.5;
     const weeklyOTCap = settings?.attendance?.weeklyOT || 45;
     let overtimeHours = 0;
-    if ((emp.employmentType || 'monthly') === 'monthly') {
+    // A shift can switch overtime off (Shift.countOvertime, on by default).
+    // Every caller populates shiftId; an unpopulated id reads as "on", as before.
+    const shiftPaysOvertime = emp?.shiftId?.countOvertime !== false;
+    if ((emp.employmentType || 'monthly') === 'monthly' && shiftPaysOvertime) {
         attendanceRecords.forEach(rec => {
             if (!rec.totalWorkMs) return;
             const hoursWorked = rec.totalWorkMs / (1000 * 60 * 60);

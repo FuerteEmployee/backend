@@ -24,6 +24,21 @@ const ShiftSchema = new mongoose.Schema({
     // lunch, so the bar would otherwise be the whole span and any real break
     // made the day a half day (Ayush, 12 Oct: 9h14m at work, graded half).
     fullDayMins: { type: Number, default: null, min: 0 },
+    // Flexible hours. Off (the default) keeps every rule as it was: only time
+    // inside startTime-endTime is counted. On: every minute between punch-in
+    // and punch-out counts, nobody is marked Late, punch-in stays open after
+    // endTime, and the day is graded on hours alone (the bar above), never on
+    // the company Half-Day Rules cut-off. startTime/endTime then only describe
+    // the usual hours: which day a punch is filed under and when a forgotten
+    // punch-out is closed. Ayush, Oct 2026: arrives 09:30, stays to 18:30 to
+    // make up the time, and everything after 18:00 was thrown away.
+    flexibleHours: { type: Boolean, default: false },
+    // Pay overtime to people on this shift (the company's Settings > Attendance
+    // overtime rule). On by default, so every shift pays exactly as before.
+    // Switch it off for a flexible shift whose long days only make up time:
+    // with every minute counted, 06:30-22:00 six days a week could add ~169 h
+    // of overtime a month under the 45 h/week cap.
+    countOvertime: { type: Boolean, default: true },
     // Per-shift working-days override. null/unset = no override, falls back to
     // the employee's own weeklyHolidays, then the tenant-wide
     // settings.attendance.workDays default (see isWeeklyOff).

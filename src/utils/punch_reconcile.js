@@ -17,7 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const { istStartOfDay, istDateKey, applyPunchRounding, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks } = require('./attendance_helpers');
-const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay } = require('./shift_status');
+const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, dropLateOnFlexible } = require('./shift_status');
 const { lateArrival } = require('./late_arrival');
 const { buildDay } = require('./day_timeline');
 const { resolveConfig: resolveSequence } = require('./punch_sequence');
@@ -347,6 +347,7 @@ async function reconcileDay({ Attendance, PunchLog, User, Settings, adminId, emp
         }
 
         attendance.status = status;
+        dropLateOnFlexible(attendance, shift); // nobody is Late on a flexible shift
     }
 
     await attendance.save();

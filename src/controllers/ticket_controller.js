@@ -117,7 +117,7 @@ exports.getCorrectionContext = async (req, res) => {
         if (!day) return res.status(400).json({ message: 'Please pick a day.' });
 
         const me = await User.findOne({ _id: req.userId, adminId: req.adminId })
-            .select('shiftId').populate('shiftId', 'name startTime endTime').lean();
+            .select('shiftId').populate('shiftId', 'name startTime endTime flexibleHours').lean();
         const shift = me?.shiftId || null;
         const occ = occurrenceOnDay(shift, day);
         const row = await findDayRow(req.adminId, req.userId, day);
@@ -151,6 +151,8 @@ exports.getCorrectionContext = async (req, res) => {
                     overnight: occ.overnight,
                     start: occ.start,
                     end: occ.end,
+                    // The times are then only the usual hours, not limits.
+                    flexibleHours: shift.flexibleHours === true,
                 }
                 : null,
             pendingPunchIn: pending.some((p) => p.requestedPunchIn),

@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const { decrypt: decryptSecret } = require('../utils/reversible_crypto');
 const mongoose = require('mongoose');
 const { friendlyMongooseError } = require('../utils/mongoose_errors');
-const { istStartOfDay, istEndOfDay, istDateKey } = require('../utils/attendance_helpers');
+const { istStartOfDay, istEndOfDay, istDateKey, isFlexibleShift } = require('../utils/attendance_helpers');
 const { isFrozenUser, sendFrozen } = require('../utils/frozen_tenants');
 
 /**
@@ -634,8 +634,9 @@ exports.getProfile = async (req, res) => {
         // used to hide Punch In at shift end regardless, so a tenant that
         // switched the block off (or gave a late window) still saw "Your shift
         // ended" -- a refusal the server would never have made.
+        // A flexible shift never closes punch-in (isAfterShiftEnd says so too).
         userObj.punchInAfterShiftEnd = {
-            blocked: settings?.attendance?.blockPunchInAfterShiftEnd !== false,
+            blocked: settings?.attendance?.blockPunchInAfterShiftEnd !== false && !isFlexibleShift(user.shiftId),
             graceMins: Math.max(0, Number(settings?.attendance?.punchInGraceAfterShiftEndMins) || 0),
         };
 

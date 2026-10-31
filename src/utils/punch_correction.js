@@ -1,4 +1,5 @@
-const { istStartOfDay, istEndOfDay, istDateKey, istTimeOnDate, parseIstWallClock } = require('./attendance_helpers');
+const { istStartOfDay, istEndOfDay, istDateKey, istTimeOnDate, parseIstWallClock, isFlexibleShift } = require('./attendance_helpers');
+const { LATE_OUT_MARGIN_MS, FLEX_LATE_OUT_MS } = require('./working_day');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "Forgot to punch in / Forgot to punch out" -- the rules for what an EMPLOYEE
@@ -142,7 +143,10 @@ function correctionProblem({ field, requested, attendance, shift, now }) {
         return 'That time has not come yet. Please pick a time that has already passed.';
     }
 
-    const occ = occurrenceOnDay(shift, attendance.date);
+    // A flexible shift counts time outside its usual hours, so a correction is
+    // bounded by the day (as with no shift) rather than by the shift's times.
+    const flexible = isFlexibleShift(shift);
+    const occ = flexible ? null : occurrenceOnDay(shift, attendance.date);
     const recordedIn = attendance.punchIn ? new Date(attendance.punchIn) : null;
 
     if (field === 'punchIn') {
@@ -173,7 +177,10 @@ function correctionProblem({ field, requested, attendance, shift, now }) {
         if (occ && requested.getTime() > occ.end.getTime()) {
             return `Your shift ends at ${fmt12(occ.end)}. You cannot ask for a punch-out after that.`;
         }
-        if (!occ && requested.getTime() > istEndOfDay(attendance.date).getTime()) {
+        // correctionDayEnd: a flexible NIGHT shift's day still runs past midnight,
+        // and past its usual end by the same margin a late punch-out gets.
+        const lastOnDay = flexible ? correctionDayEnd(attendance.date, shift, LATE_OUT_MARGIN_MS) : istEndOfDay(attendance.date);
+        if (!occ && requested.getTime() > lastOnDay.getTime()) {
             return 'Please pick a time on the same day.';
         }
         const recOut = recordedPunchOut(attendance);
@@ -195,6 +202,9 @@ function correctionProblem({ field, requested, attendance, shift, now }) {
 function correctionDayEnd(day, shift, lateMarginMs = 0) {
     const dayEnd = istEndOfDay(day);
     const occ = occurrenceOnDay(shift, day);
+    // A flexible day shift may finish after midnight, until the nightly close
+    // (working_day.flexibleCarryDayStart), so its corrections may too.
+    if (occ && !occ.overnight && isFlexibleShift(shift)) return new Date(dayEnd.getTime() + FLEX_LATE_OUT_MS);
     if (!occ || !occ.overnight) return dayEnd;
     return new Date(Math.max(dayEnd.getTime(), occ.end.getTime() + lateMarginMs));
 }

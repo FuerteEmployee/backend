@@ -11,12 +11,12 @@ const { calculateAndSaveSalary } = require('./salary_controller');
 const { calculateDistance, nearestBranchDistance, PUNCH_MAX_ACCURACY_M } = require('../utils/distance');
 const { MAX_SESSIONS, allSessions, gradeDay, computeWorkedMs, computeSessionWorkMs, isAfterShiftEnd } = require('../utils/shift_status');
 // Used only by the admin endpoints below (updateAttendance, getReports).
-const { computeSessionGrossMs, syncRootPunchOut, isDayOpen, requiredWorkMs, scheduledLunchMs, resolveGraceMs } = require('../utils/shift_status');
+const { computeSessionGrossMs, syncRootPunchOut, isDayOpen, requiredWorkMs, scheduledLunchMs, resolveGraceMs, dropLateOnFlexible } = require('../utils/shift_status');
 const Leave = require('../models/Leave');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 const { isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istMonthRange, istTimeOnDate, applyPunchRounding } = require('../utils/attendance_helpers');
-const { istCalendarDate, parseIstWallClock, istHHMM } = require('../utils/attendance_helpers');
-const { findWorkingDay } = require('../utils/working_day');
+const { istCalendarDate, parseIstWallClock, istHHMM, isFlexibleShift } = require('../utils/attendance_helpers');
+const { findWorkingDay, FLEX_LATE_OUT_MS } = require('../utils/working_day');
 const { serialisePerUser, withEmployeeLock } = require('../utils/employee_lock');
 const { isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
 const { lateArrival } = require('../utils/late_arrival');
@@ -1070,6 +1070,7 @@ exports.punchOut = async (req, res) => {
         if (attendance.status === 'late' || attendance.status === 'half-day' || (user.shiftId && isLatePunchIn(attendance.punchIn, user.shiftId, settings))) {
             attendance.wasLate = true;
         }
+        dropLateOnFlexible(attendance, user.shiftId); // nobody is Late on a flexible shift
 
         // 6. Apply configurable half-day rules (shared with regularization approval).
         const { status: finalStatus, netWorkHours, remarksAppend } = determineHalfDayStatus({
@@ -1404,7 +1405,7 @@ exports.getReports = async (req, res) => {
                 populate: [
                     // The grading fields ride along so `grading` below can be
                     // computed from the same shift the server grades with.
-                    { path: 'shiftId', select: 'name startTime endTime halfDayLatePunchInMin halfDayEarlyPunchOutMin halfDayMinHours halfDayLateAfterMin fullDayMins lunch workDays' },
+                    { path: 'shiftId', select: 'name startTime endTime halfDayLatePunchInMin halfDayEarlyPunchOutMin halfDayMinHours halfDayLateAfterMin fullDayMins flexibleHours lunch workDays' },
                     { path: 'branchId', select: 'branchName city' },
                 ],
             }).lean(),
@@ -1558,9 +1559,13 @@ exports.updateAttendance = async (req, res) => {
                 const v = merged[field];
                 if (!v || !timeChanged.includes(field)) continue;
                 const t = v.getTime();
-                // An end may run into the next morning only on a shift that does.
+                // An end may run into the next morning only on a shift that does:
+                // a night shift, or a flexible one until the nightly close (04:00),
+                // the same window its own punch-out has (working_day).
                 const endField = field === 'punchOut' || field === 'lunchOutTime';
-                const upper = endField && overnight ? dayEnd.getTime() + 24 * 60 * 60 * 1000 : dayEnd.getTime();
+                const upper = endField && overnight ? dayEnd.getTime() + 24 * 60 * 60 * 1000
+                    : endField && isFlexibleShift(shift) ? dayEnd.getTime() + FLEX_LATE_OUT_MS
+                    : dayEnd.getTime();
                 if (t < dayStart.getTime() || t > upper) {
                     return res.status(400).json({ message: `${label} (${v.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}) is not on ${dayLabel}. An edit must stay on the day it corrects.` });
                 }

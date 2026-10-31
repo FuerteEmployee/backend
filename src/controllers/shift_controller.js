@@ -10,6 +10,7 @@ const WORK_DAYS = ['M', 'T', 'W', 'Th', 'F', 'Sa', 'Su'];
 const LUNCH_MODES = ['inherit', 'none', 'fixed_window', 'fixed_duration', 'from_punches'];
 const MAX_NAME_LENGTH = 60;
 const DAY_MINS = 24 * 60;
+const MAX_FLEXIBLE_FULL_DAY = 16 * 60;
 
 // An employee who has left keeps their assignment on record, but nothing
 // punches for them, so they never block a delete. Missing status reads as
@@ -161,6 +162,18 @@ function readShiftInput(body = {}, { partial = false } = {}) {
         data.fullDayMins = f.value > 0 ? f.value : null; // blank or 0: worked out from the shift
     }
 
+    if (has('flexibleHours')) {
+        // A real switch only. The string "false" is truthy, and a stray value
+        // here changes how every day on the shift is paid.
+        if (typeof body.flexibleHours !== 'boolean') return { error: 'Choose whether this shift has flexible hours.' };
+        data.flexibleHours = body.flexibleHours;
+    }
+
+    if (has('countOvertime')) {
+        if (typeof body.countOvertime !== 'boolean') return { error: 'Choose whether this shift pays overtime.' };
+        data.countOvertime = body.countOvertime;
+    }
+
     if (has('workDays')) {
         if (body.workDays === null) {
             data.workDays = null; // no override: the company's work days apply
@@ -223,7 +236,15 @@ function crossCheck(shift) {
     }
     const fullDay = Number(shift.fullDayMins) || 0;
     if (fullDay > 0) {
-        if (fullDay > span) return `Hours for a full day (${fmtMins(fullDay)}) cannot be more than the shift (${fmtMins(span)}).`;
+        // On a flexible shift time outside the shift counts, so a full day may
+        // ask for more than the shift's own length -- within reason.
+        if (shift.flexibleHours === true) {
+            if (fullDay > MAX_FLEXIBLE_FULL_DAY) return `Hours for a full day cannot be more than ${fmtMins(MAX_FLEXIBLE_FULL_DAY)}.`;
+        } else if (fullDay > span) {
+            // Usually met when switching Flexible hours OFF on a shift whose
+            // full day was set longer than the shift while it was on.
+            return `Hours for a full day (${fmtMins(fullDay)}) cannot be more than the shift (${fmtMins(span)}). Lower "Full day needs" to ${fmtMins(span)} or less (or leave it blank), then save again.`;
+        }
         if (graceIn + graceOut >= fullDay) return `Late and early grace (${fmtMins(graceIn + graceOut)}) must be less than the hours for a full day (${fmtMins(fullDay)}).`;
     }
     return null;
@@ -368,7 +389,7 @@ exports.updateShift = async (req, res) => {
 
         // Only when the schedule itself is being changed, so a rename of a
         // legacy shift is never refused over values nobody touched.
-        const scheduleKeys = ['startTime', 'endTime', 'halfDayLatePunchInMin', 'halfDayEarlyPunchOutMin', 'lunch'];
+        const scheduleKeys = ['startTime', 'endTime', 'halfDayLatePunchInMin', 'halfDayEarlyPunchOutMin', 'lunch', 'fullDayMins', 'flexibleHours'];
         if (scheduleKeys.some((k) => k in data)) {
             const crossError = crossCheck({ ...current, ...data });
             if (crossError) return res.status(400).json({ message: crossError });

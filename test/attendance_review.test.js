@@ -1600,6 +1600,202 @@ test('halfDayMinHours off (0) leaves the span-based bar untouched', () => {
     assert.equal(requiredWorkMs(shift, MIN6_SETTINGS, new Date(T(9, 46))), 7 * 3600000 + 50 * 60000);
 });
 
+// ── Flexible hours (Shift.flexibleHours): count every minute, no Late ─────────
+section('flexible hours');
+{
+    const { isFlexibleShift, isHalfDayLateArrival } = require('../src/utils/attendance_helpers');
+    const { isAfterShiftEnd } = require('../src/utils/shift_status');
+    const { correctionProblem } = require('../src/utils/punch_correction');
+    // Ayush's shift in production, and Fuerte's company rules.
+    const FIXED = { startTime: '09:00', endTime: '18:00', halfDayLatePunchInMin: 5, halfDayEarlyPunchOutMin: 5, fullDayMins: 480, lunch: { mode: 'from_punches', minMins: 0, maxMins: 160 } };
+    const FLEX = { ...FIXED, flexibleHours: true };
+    const CO = { attendance: { minLunch: 60, lateGrace: 15, earlyGrace: 5, halfDayRules: { method: 'both', bothLogic: 'or', cutoffTime: '09:35', minHours: 8, deductLunch: true } } };
+    const H = (ms) => Math.round(ms / 60000);
+    const day = (sessions, lunch) => {
+        const s = sessions.map(([a, b, c, d]) => ({ punchIn: new Date(T(a, b)), punchOut: new Date(T(c, d)) }));
+        return {
+            date: new Date(SEP16_IST_MIDNIGHT), punchIn: s[0].punchIn, punchOut: s[s.length - 1].punchOut, shifts: s,
+            lunchInTime: lunch ? new Date(T(lunch[0], lunch[1])) : null, lunchOutTime: lunch ? new Date(T(lunch[2], lunch[3])) : null,
+        };
+    };
+    const grade = (att, shift) => {
+        const worked = computeWorkedMs(att, shift, CO);
+        const r = gradeHalf({ punchIn: att.punchIn, punchOut: att.punchOut, totalWorkMs: worked, lunchInTime: att.lunchInTime, lunchOutTime: att.lunchOutTime, shift }, CO);
+        const g = gradeDay(att, shift, CO);
+        return { mins: H(worked), status: g === 'half-day' ? 'half-day' : r.status, remarks: r.remarksAppend };
+    };
+
+    test('only a real true switches it on (absent, false and "true" stay off)', () => {
+        assert.equal(isFlexibleShift(FLEX), true);
+        assert.equal(isFlexibleShift(FIXED), false);
+        assert.equal(isFlexibleShift({ ...FIXED, flexibleHours: false }), false);
+        assert.equal(isFlexibleShift({ ...FIXED, flexibleHours: 'true' }), false);
+        assert.equal(isFlexibleShift(null), false);
+    });
+
+    test('19 Oct (in 09:34, out 19:18, 1h34m lunch): Half Day on the fixed shift, Full Day on flexible', () => {
+        const att = day([[9, 34, 19, 18]], [12, 34, 14, 8]);
+        const fixed = grade(att, FIXED);
+        assert.equal(fixed.mins, 6 * 60 + 52); // 09:34-18:00 minus lunch
+        assert.equal(fixed.status, 'half-day');
+        const flex = grade(att, FLEX);
+        assert.equal(flex.mins, 8 * 60 + 10); // 09:34-19:18 minus lunch
+        assert.equal(flex.status, 'present');
+    });
+
+    test('time before the start counts too, across several sessions', () => {
+        const att = day([[7, 0, 9, 0], [10, 0, 16, 0]]);
+        assert.equal(grade(att, FIXED).mins, 6 * 60); // 07:00-09:00 dropped
+        assert.equal(grade(att, FLEX).mins, 8 * 60);
+        assert.equal(computeSessionWorkMs(att.shifts[0], att, FLEX), 2 * 3600000);
+        assert.equal(computeSessionWorkMs(att.shifts[0], att, FIXED), 0);
+    });
+
+    test('nobody on it is Late; the fixed shift still marks 09:30 late', () => {
+        assert.equal(isLatePunchIn(new Date(T(9, 30)), FIXED, CO), true);
+        assert.equal(isLatePunchIn(new Date(T(9, 30)), FLEX, CO), false);
+        assert.equal(isLatePunchIn(new Date(T(13, 0)), FLEX, CO), false);
+    });
+
+    test('the Full Day bar is the same number with or without it', () => {
+        assert.equal(requiredWorkMs(FLEX, CO, new Date(T(9, 0))), requiredWorkMs(FIXED, CO, new Date(T(9, 0))));
+        assert.equal(H(requiredWorkMs(FLEX, CO, new Date(T(9, 0)))), 470); // 480 - 5 - 5
+    });
+
+    test('short hours are still a Half Day, with no late/early remark', () => {
+        const r = grade(day([[9, 40, 15, 0]]), FLEX);
+        assert.equal(r.status, 'half-day');
+        assert.match(r.remarks, /Short hours for shift/);
+        assert.doesNotMatch(r.remarks, /Late punch-in|Early punch-out/);
+    });
+
+    test('company Half-Day Rules cut-off (09:35) does not apply, even with no shift grace', () => {
+        const noGraceFixed = { ...FIXED, halfDayLatePunchInMin: 0, halfDayEarlyPunchOutMin: 0, endTime: '19:00' };
+        const noGraceFlex = { ...noGraceFixed, flexibleHours: true };
+        const att = day([[10, 0, 19, 0]]); // 9h, no lunch punched
+        assert.equal(grade(att, noGraceFixed).status, 'half-day'); // company: after 09:35
+        assert.equal(grade(att, noGraceFlex).status, 'present');
+    });
+
+    test('"Half Day if later than" (halfDayLateAfterMin) is ignored on flexible', () => {
+        const late = day([[11, 0, 19, 30]]);
+        assert.equal(isHalfDayLateArrival(late.punchIn, { ...FIXED, halfDayLateAfterMin: 60 }), true);
+        assert.equal(isHalfDayLateArrival(late.punchIn, { ...FLEX, halfDayLateAfterMin: 60 }), false);
+        assert.equal(grade(late, { ...FLEX, halfDayLateAfterMin: 60 }).status, 'present');
+    });
+
+    test('lunch rules still apply: a fixed-length lunch is still deducted', () => {
+        const flexFixedLunch = { ...FLEX, lunch: { mode: 'fixed_duration', durationMins: 60 } };
+        assert.equal(grade(day([[9, 0, 19, 0]]), flexFixedLunch).mins, 9 * 60);
+    });
+
+    test('punch-in stays open after the usual end time', () => {
+        assert.equal(isAfterShiftEnd(FIXED, new Date(T(19, 0))), true);
+        assert.equal(isAfterShiftEnd(FLEX, new Date(T(19, 0))), false);
+    });
+
+    test('forgot-to-punch requests are bounded by the day, not the shift times', () => {
+        const att = day([[9, 30, 18, 0]]);
+        const now = new Date(T(23, 0));
+        const outAt = (shift, h, m) => correctionProblem({ field: 'punchOut', requested: new Date(T(h, m)), attendance: att, shift, now });
+        const inAt = (shift, h, m) => correctionProblem({ field: 'punchIn', requested: new Date(T(h, m)), attendance: att, shift, now });
+        assert.match(outAt(FIXED, 19, 30), /shift ends/);
+        assert.equal(outAt(FLEX, 19, 30), null);
+        assert.match(inAt(FIXED, 8, 0), /shift starts/);
+        assert.equal(inAt(FLEX, 8, 0), null);
+        assert.ok(inAt(FLEX, 9, 45), 'still has to be before the recorded punch-in');
+        // Past midnight: allowed until the nightly close (04:00), like the punch-out itself.
+        const ask = (h, m) => correctionProblem({ field: 'punchOut', requested: new Date(T(h, m)), attendance: att, shift: FLEX, now: new Date(T(30, 0)) });
+        assert.equal(ask(24 + 1, 0), null);
+        assert.match(ask(24 + 5, 0), /same day/);
+        assert.match(correctionProblem({ field: 'punchOut', requested: new Date(T(24 + 1, 0)), attendance: att, shift: FIXED, now: new Date(T(30, 0)) }), /shift ends/);
+    });
+
+    // ── Edge cases, written before the code (TDD, 31 Oct) ──────────────────
+    test('bad data: a session that ends before it starts is never extra pay on flexible', () => {
+        // Punch-out stored earlier than the punch-in (seen in real rows). The
+        // fixed rule clamps it to nothing; flexible must not read it as a
+        // 15-hour "past midnight" session.
+        const att = day([[18, 0, 9, 0]]);
+        assert.equal(computeSessionWorkMs(att.shifts[0], att, FIXED), 0);
+        assert.equal(computeSessionWorkMs(att.shifts[0], att, FLEX), computeSessionWorkMs(att.shifts[0], att, FIXED));
+        assert.equal(computeWorkedMs(att, FLEX, CO), computeWorkedMs(att, FIXED, CO));
+    });
+
+    const NIGHT = { startTime: '22:00', endTime: '06:00', halfDayLatePunchInMin: 5, halfDayEarlyPunchOutMin: 5, fullDayMins: 480, lunch: { mode: 'none' } };
+    const NIGHT_FLEX = { ...NIGHT, flexibleHours: true };
+    const nightDay = () => {
+        const pIn = new Date(T(21, 30)), pOut = new Date(T(24 + 7, 30)); // 21:30 to 07:30 next morning
+        return { date: new Date(SEP16_IST_MIDNIGHT), punchIn: pIn, punchOut: pOut, shifts: [{ punchIn: pIn, punchOut: pOut }] };
+    };
+
+    test('night shift: flexible counts 21:30 to 07:30 in full, the fixed rule only 22:00 to 06:00', () => {
+        assert.equal(H(computeWorkedMs(nightDay(), NIGHT, CO)), 8 * 60);
+        assert.equal(H(computeWorkedMs(nightDay(), NIGHT_FLEX, CO)), 10 * 60);
+        assert.equal(isLatePunchIn(new Date(T(22, 30)), NIGHT_FLEX, CO), false);
+    });
+
+    test('night shift: forgot-to-punch-out at 07:30 the next morning is allowed on flexible', () => {
+        const att = { ...nightDay(), punchOut: null, shifts: [{ punchIn: new Date(T(21, 30)), punchOut: null }] };
+        const ask = (shift, h, m) => correctionProblem({ field: 'punchOut', requested: new Date(T(h, m)), attendance: att, shift, now: new Date(T(24 + 20, 0)) });
+        assert.match(ask(NIGHT, 24 + 7, 30), /shift ends/);
+        assert.equal(ask(NIGHT_FLEX, 24 + 7, 30), null);
+        // Still bounded: the next afternoon is not this night's punch-out.
+        assert.match(ask(NIGHT_FLEX, 24 + 15, 0), /same day/);
+    });
+
+    // ── Fixes from the break-it report (31 Oct), tests written first ────────
+    test('break #1: a forgotten punch-out closed by the system counts only the shift hours on flexible', () => {
+        const sys = day([[0, 5, 18, 0]]);
+        sys.shifts[0].closeReason = 'shift_end';
+        assert.equal(H(computeWorkedMs(sys, FLEX, CO)), 9 * 60); // 09:00-18:00, like the fixed rule
+        assert.equal(H(computeSessionWorkMs(sys.shifts[0], sys, FLEX)), 9 * 60);
+        const real = day([[0, 5, 18, 0]]);
+        real.shifts[0].closeReason = 'manual'; // punched out by the person: every minute counts
+        assert.equal(H(computeWorkedMs(real, FLEX, CO)), 17 * 60 + 55);
+    });
+
+    test('break #2: just after midnight, a flexible day shift\'s open day is still yesterday', () => {
+        const { flexibleCarryDayStart } = require('../src/utils/working_day');
+        const yesterdayStart = SEP16_IST_MIDNIGHT - DAY_MS;
+        assert.equal(flexibleCarryDayStart(FLEX, new Date(T(1, 0)))?.getTime(), yesterdayStart);
+        assert.equal(flexibleCarryDayStart(FLEX, new Date(T(4, 30))), null, 'after 04:00 it is a new day');
+        assert.equal(flexibleCarryDayStart(FIXED, new Date(T(1, 0))), null, 'fixed shifts unchanged');
+        assert.equal(flexibleCarryDayStart(NIGHT_FLEX, new Date(T(1, 0))), null, 'night shifts keep their own rule');
+        assert.equal(flexibleCarryDayStart({ ...FLEX, startTime: '02:00', endTime: '11:00' }, new Date(T(3, 0))), null, 'not once today\'s shift has started');
+    });
+
+    test('break #3: overlapping sessions are counted once, on every shift', () => {
+        const ov = day([[9, 0, 19, 0], [10, 0, 20, 0]]);
+        assert.equal(H(computeWorkedMs(ov, FIXED, CO)), 9 * 60);  // was 17 h
+        assert.equal(H(computeWorkedMs(ov, FLEX, CO)), 11 * 60);  // was 20 h
+        const inside = day([[9, 0, 18, 0], [12, 0, 13, 0]]);
+        assert.equal(H(computeWorkedMs(inside, FIXED, CO)), 9 * 60);
+        const apart = day([[9, 0, 13, 0], [14, 0, 18, 0]]); // the normal case is untouched
+        assert.equal(H(computeWorkedMs(apart, FIXED, CO)), 8 * 60);
+        assert.equal(H(computeWorkedMs(apart, FLEX, CO)), 8 * 60);
+    });
+
+    test('break #3: a lunch window is deducted once even when sessions overlap', () => {
+        const shift = { ...FIXED, lunch: { mode: 'fixed_window', startTime: '13:00', endTime: '14:00' } };
+        assert.equal(H(computeWorkedMs(day([[9, 0, 18, 0], [10, 0, 18, 0]]), shift, CO)), 8 * 60);
+        assert.equal(H(computeWorkedMs(day([[9, 0, 18, 0]]), shift, CO)), 8 * 60);
+    });
+
+    test('mid-day switch: closing a day on a flexible shift clears an earlier Late mark', () => {
+        const { dropLateOnFlexible } = require('../src/utils/shift_status');
+        const a = { status: 'late', wasLate: true };
+        dropLateOnFlexible(a, FLEX);
+        assert.deepEqual(a, { status: 'present', wasLate: false });
+        const b = { status: 'late', wasLate: true };
+        dropLateOnFlexible(b, FIXED);
+        assert.deepEqual(b, { status: 'late', wasLate: true }, 'fixed shifts keep it');
+        const c = { status: 'half-day', wasLate: true };
+        dropLateOnFlexible(c, FLEX);
+        assert.deepEqual(c, { status: 'half-day', wasLate: false });
+    });
+}
+
 (async () => {
     for (const t of asyncTests) {
         try {

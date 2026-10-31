@@ -207,6 +207,14 @@ const istShiftOccurrence = (shift, refDate) => {
   return { start, end, overnight: true };
 };
 
+/**
+ * Does this shift count every worked minute, not just those inside its times?
+ *
+ * Only an explicit `true` turns it on: a shift saved before the field existed
+ * carries nothing, and must keep the clamped behaviour it was configured for.
+ */
+const isFlexibleShift = (shift) => shift?.flexibleHours === true;
+
 /** "HH:MM" in IST, for displaying a cutoff back to the employee. */
 const istHHMM = (date) => {
   const s = new Date(new Date(date).getTime() + IST_OFFSET_MS);
@@ -220,6 +228,8 @@ const istHHMM = (date) => {
  */
 const isLatePunchIn = (punchInDate, shift, settings) => {
   if (!shift || !shift.startTime || !punchInDate) return false;
+  // A flexible shift has no fixed arrival time, so nothing is late.
+  if (isFlexibleShift(shift)) return false;
 
   // The SHIFT's own grace decides, and the tenant value applies only where the
   // shift sets none. Same resolver, and therefore the same number, the Full Day
@@ -254,6 +264,7 @@ const isLatePunchIn = (punchInDate, shift, settings) => {
 const isHalfDayLateArrival = (punchInDate, shift) => {
   const limit = Number(shift?.halfDayLateAfterMin);
   if (!(limit > 0) || !shift?.startTime || !punchInDate) return false;
+  if (isFlexibleShift(shift)) return false; // arrival time does not matter on it
   const occ = istShiftOccurrence(shift, punchInDate);
   const cutoff = occ
     ? new Date(occ.start.getTime() + limit * 60 * 1000)
@@ -313,8 +324,13 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   // do is decide the day by themselves, so arriving five minutes late and
   // staying five minutes longer now costs nothing, which is what an admin
   // setting "5 minutes' grace" believes they have configured.
+  //
+  // A flexible shift is always graded this way, even with no grace set: the
+  // company cut-off below is a clock time, and on a flexible shift the clock
+  // decides nothing.
+  const flexible = isFlexibleShift(shift);
   let hasShiftRules = false;
-  if (shift && (shift.halfDayLatePunchInMin || shift.halfDayEarlyPunchOutMin || shift.halfDayMinHours > 0 || shift.halfDayLateAfterMin > 0)) {
+  if (shift && (flexible || shift.halfDayLatePunchInMin || shift.halfDayEarlyPunchOutMin || shift.halfDayMinHours > 0 || shift.halfDayLateAfterMin > 0)) {
     hasShiftRules = true;
 
     const requiredMs = requiredWorkMs(shift, settings, punchIn ? new Date(punchIn) : new Date());
@@ -339,8 +355,9 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
       }
 
       // Kept as context, never as a verdict. An admin looking at a half-day
-      // still wants to see that it began with a late arrival.
-      if (shift.halfDayLatePunchInMin && punchIn) {
+      // still wants to see that it began with a late arrival. Not on a
+      // flexible shift: there, arriving late or leaving early is not a reason.
+      if (!flexible && shift.halfDayLatePunchInMin && punchIn) {
         const inOcc = istShiftOccurrence(shift, punchIn);
         const lateCutoff = inOcc
           ? new Date(inOcc.start.getTime() + shift.halfDayLatePunchInMin * 60 * 1000)
@@ -350,7 +367,7 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
         }
       }
 
-      if (shift.halfDayEarlyPunchOutMin && punchIn && punchOut) {
+      if (!flexible && shift.halfDayEarlyPunchOutMin && punchIn && punchOut) {
         // Resolved as one occurrence so an overnight shift's end lands on the
         // correct day relative to the punch that is being judged.
         const outOcc = istShiftOccurrence(shift, punchIn);
@@ -531,4 +548,4 @@ const parseDeviceTimestamp = (raw, now = new Date(), offsetMinutes = 0) => {
   return parsed;
 };
 
-module.exports = { isHalfDayLateArrival, DAY_LABELS, isWeeklyOff, toLocalDateKey, parseIstWallClock, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, istMonthRange, istTimeOnDate, istShiftOccurrence, istMinutesOfDay, istSecondsOfMinute, istHHMM, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };
+module.exports = { isFlexibleShift, isHalfDayLateArrival, DAY_LABELS, isWeeklyOff, toLocalDateKey, parseIstWallClock, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, istMonthRange, istTimeOnDate, istShiftOccurrence, istMinutesOfDay, istSecondsOfMinute, istHHMM, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };

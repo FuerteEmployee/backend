@@ -54,7 +54,7 @@ const {
     GEOFENCE_UNAMBIGUOUS_FACTOR, GEOFENCE_PENDING_STALE_MS,
 } = require('./geofence_window');
 const { istStartOfDay, istEndOfDay, istDateKey, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks } = require('./attendance_helpers');
-const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, allSessions, syncRootPunchOut, MAX_SESSIONS } = require('./shift_status');
+const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, allSessions, syncRootPunchOut, MAX_SESSIONS, dropLateOnFlexible } = require('./shift_status');
 const { isTrustworthyFix, nearestBranchDistance } = require('./distance');
 const { isTenantFeatureEnabled } = require('./feature_toggles');
 const { logAttendanceEvent } = require('./attendance_event_logger');
@@ -588,6 +588,7 @@ async function closeSession({ attendance, user, settings, openIdx, now, verdict 
     ) {
         attendance.wasLate = true;
     }
+    dropLateOnFlexible(attendance, user.shiftId); // nobody is Late on a flexible shift
 
     // The configurable half-day rules, exactly as the manual punch-out applies
     // them (shift grace bar, or the tenant's time/duration rules). The status is

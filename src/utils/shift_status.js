@@ -27,7 +27,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // attendance_helpers has no requires of its own, so this stays acyclic.
-const { istShiftOccurrence } = require('./attendance_helpers');
+const { istShiftOccurrence, isFlexibleShift } = require('./attendance_helpers');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -218,16 +218,58 @@ function shiftWindow(attendance, shift, sessions) {
  * beside them.
  */
 function computeSessionWorkMs(session, attendance, shift) {
-    if (!session?.punchIn || !session?.punchOut) return null;
-    const { startMs, endMs } = shiftWindow(attendance, shift, allSessions(attendance));
+    const span = sessionCreditInterval(session, attendance, shift);
+    return span ? span[1] - span[0] : null;
+}
 
+/**
+ * The stretch of ONE session that is credited, as [fromMs, toMs], or null.
+ *
+ * Returned as an interval rather than a length so the day can be measured as
+ * the union of its sessions (computeWorkedMs): two sessions that overlap -- an
+ * admin edit, a machine tap filed into a phone session -- must not pay the
+ * shared time twice.
+ */
+function sessionCreditInterval(session, attendance, shift) {
+    if (!session?.punchIn || !session?.punchOut) return null;
     let inMs = new Date(session.punchIn).getTime();
     let outMs = new Date(session.punchOut).getTime();
     if (Number.isNaN(inMs) || Number.isNaN(outMs)) return null;
+
+    // A flexible shift counts the whole session: its times are the usual
+    // hours, not a fence around the paid ones. Two exceptions go through the
+    // shift's clamp like any other session:
+    //   - a punch-out stored BEFORE its punch-in is bad data, and the "ran
+    //     past midnight" reading below would pay it as most of a day;
+    //   - a session the 04:00 job closed at shift end ('shift_end'): nobody
+    //     knows when that person left, so only the shift's own hours count.
+    //     In at 00:05 and never out used to credit 17.9 h.
+    if (isFlexibleShift(shift) && outMs >= inMs && session.closeReason !== 'shift_end') {
+        return [inMs, outMs];
+    }
+
+    const { startMs, endMs } = shiftWindow(attendance, shift, allSessions(attendance));
     if (outMs < inMs) outMs += DAY_MS; // ran past midnight
     if (startMs !== null) inMs = Math.max(inMs, startMs);
     if (endMs !== null) outMs = Math.min(outMs, endMs);
-    return Math.max(0, outMs - inMs);
+    return [inMs, Math.max(inMs, outMs)];
+}
+
+/** Total length of a set of [from, to] intervals, overlaps counted once. */
+function unionMs(intervals) {
+    const sorted = intervals.filter(Boolean).slice().sort((a, b) => a[0] - b[0]);
+    let total = 0;
+    let cur = null;
+    for (const [a, b] of sorted) {
+        if (!cur || a > cur[1]) {
+            if (cur) total += cur[1] - cur[0];
+            cur = [a, b];
+        } else if (b > cur[1]) {
+            cur[1] = b;
+        }
+    }
+    if (cur) total += cur[1] - cur[0];
+    return total;
 }
 
 /**
@@ -257,10 +299,10 @@ function computeWorkedMs(attendance, shift, settings) {
     const sessions = allSessions(attendance);
     if (sessions.length === 0) return 0;
 
-    let totalMs = 0;
-    for (const s of sessions) {
-        totalMs += computeSessionWorkMs(s, attendance, shift) || 0;
-    }
+    // The union of the sessions, not their sum: time covered by two sessions
+    // at once was paid twice (09-19 + 10-20 credited 17 h, 20 h on flexible,
+    // for 11 h at work). Sessions that do not overlap add up exactly as before.
+    const totalMs = unionMs(sessions.map((s) => sessionCreditInterval(s, attendance, shift)));
 
     return Math.max(0, totalMs - lunchDeductionMs(attendance, settings, shift, totalMs));
 }
@@ -344,16 +386,20 @@ function resolveLunchPolicy(shift, settings) {
 /** Milliseconds of `[fromMs,toMs)` that fall inside any worked session. */
 function presenceOverlapMs(attendance, shift, fromMs, toMs) {
     if (fromMs === null || toMs === null || toMs <= fromMs) return 0;
-    let overlap = 0;
+    // Each session's part of the window, then their union: two overlapping
+    // sessions would otherwise deduct the same lunch hour twice.
+    const parts = [];
     for (const sess of allSessions(attendance)) {
         if (!sess?.punchIn || !sess?.punchOut) continue;
         let a = new Date(sess.punchIn).getTime();
         let b = new Date(sess.punchOut).getTime();
         if (Number.isNaN(a) || Number.isNaN(b)) continue;
         if (b < a) b += DAY_MS;
-        overlap += Math.max(0, Math.min(b, toMs) - Math.max(a, fromMs));
+        const from = Math.max(a, fromMs);
+        const to = Math.min(b, toMs);
+        if (to > from) parts.push([from, to]);
     }
-    return overlap;
+    return unionMs(parts);
 }
 
 /**
@@ -608,6 +654,18 @@ function gradeDay(attendance, shift, settings) {
 }
 
 /**
+ * Closing a day on a flexible shift: nobody on it is Late, so a Late mark left
+ * from earlier the same day (the shift was switched to flexible mid-day, or the
+ * punch-in came from code that did not know the flag) is cleared rather than
+ * carried into the dashboard's late count. Does nothing on any other shift.
+ */
+function dropLateOnFlexible(attendance, shift) {
+    if (!attendance || !isFlexibleShift(shift)) return;
+    if (attendance.status === 'late') attendance.status = 'present';
+    attendance.wasLate = false;
+}
+
+/**
  * Has `at` passed the end of the shift occurrence it belongs to?
  *
  * Only ever used to refuse a NEW punch-in. A punch-OUT must always be allowed
@@ -621,6 +679,9 @@ function gradeDay(attendance, shift, settings) {
  */
 function isAfterShiftEnd(shift, at, graceMs = 0) {
     if (!shift?.startTime || !shift?.endTime) return false;
+    // Time after the usual end still counts on a flexible shift, so a second
+    // session that starts then must be allowed to begin.
+    if (isFlexibleShift(shift)) return false;
     const when = at ? new Date(at) : new Date();
     if (Number.isNaN(when.getTime())) return false;
 
@@ -653,4 +714,6 @@ module.exports = {
     requiredWorkMs,
     isAfterShiftEnd,
     gradeDay,
+    isFlexibleShift,
+    dropLateOnFlexible,
 };
