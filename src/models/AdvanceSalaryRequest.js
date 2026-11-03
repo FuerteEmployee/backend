@@ -24,14 +24,10 @@ const AdvanceSalaryRequestSchema = new mongoose.Schema({
         enum: ['advance-salary', 'loan'],
         required: true
     },
-    // Ceiling matches the controller's MAX_ADVANCE_SALARY_AMOUNT check — kept
-    // here too as the last line of defense in case of a direct DB write or a
-    // future code path that skips the controller's own validation.
     amount: {
         type: Number,
         required: true,
-        min: 1,
-        max: 10_000_000 // ₹1 crore
+        min: 1
     },
     reason: {
         type: String,
@@ -52,8 +48,15 @@ const AdvanceSalaryRequestSchema = new mongoose.Schema({
     // (partial approval). Set when the request is approved.
     approvedAmount: {
         type: Number,
-        min: 0,
-        max: 10_000_000 // ₹1 crore
+        min: 0
+    },
+    // Why the admin said no. Optional, set only by the reject endpoint, and
+    // shown to the employee on the rejected request. Same name as the remark
+    // on Leave, Regularization and Ticket.
+    adminRemark: {
+        type: String,
+        trim: true,
+        maxlength: 300
     },
     reviewedBy: {
         type: mongoose.Schema.Types.ObjectId,

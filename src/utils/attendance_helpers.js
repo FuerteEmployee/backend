@@ -96,41 +96,15 @@ const istCalendarDate = (date = new Date()) => {
 };
 
 /**
- * Resolve a shift's "HH:mm" wall-clock time (always IST — these deployments
- * are IST-only) to a real UTC instant, on the IST calendar day `referenceDate`
- * falls on. Built the same way `parseDeviceTimestamp` builds a device
- * timestamp: from IST parts via `Date.UTC` minus the IST offset, so the result
- * is independent of the server process's own OS/system timezone.
- *
- * This replaces the `new Date(referenceDate); d.setHours(hh, mm, 0, 0)` pattern
- * used to appear at every shift-boundary check in this codebase (late check,
- * half-day cutoffs, auto-close, day grading). `setHours` reads/writes the wall
- * clock in whatever timezone the *process* happens to be running in — correct
- * on an IST dev machine, silently wrong by ~5:30 (and often a whole calendar
- * day, near midnight) on a UTC cloud server. That mismatch graded real,
- * fully-worked days as Absent in production while looking fine locally.
+ * First and last IST instant of calendar month `month` (1-12) of `year`, for
+ * querying Attendance `date` fields. `new Date(year, month - 1, 1)` is host
+ * midnight: on a UTC server that is 05:30 IST on the 1st, so the 1st's own
+ * IST-midnight row falls outside the range and the day reads as absent.
  */
-const shiftTimeOnDate = (hhmm, referenceDate) => {
-  if (!hhmm || typeof hhmm !== 'string') return null;
-  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const [y, mo, d] = istDateKey(referenceDate).split('-').map(Number);
-  const utcMs = Date.UTC(y, mo - 1, d, Number(m[1]), Number(m[2]), 0, 0) - IST_OFFSET_MS;
-  return new Date(utcMs);
-};
-
-/**
- * "HH:mm" clock arithmetic for display only (e.g. "this cutoff was 09:00 plus
- * 30 minutes late-grace, i.e. 09:30") — pure minute math, no Date/timezone
- * involved at all, so there's nothing here for a server timezone to get wrong.
- */
-const clockStringAfter = (hhmm, offsetMinutes) => {
-  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return hhmm;
-  const total = (((Number(m[1]) * 60 + Number(m[2]) + offsetMinutes) % 1440) + 1440) % 1440;
-  const hh = Math.floor(total / 60);
-  const mm = total % 60;
-  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+const istMonthRange = (year, month) => {
+  const start = new Date(Date.UTC(year, month - 1, 1) - IST_OFFSET_MS);
+  const end = new Date(Date.UTC(year, month, 1) - IST_OFFSET_MS - 1);
+  return { start, end };
 };
 
 /**
@@ -160,6 +134,93 @@ const applyPunchRounding = (date, label, settings) => {
   return roundPunchTime(date, cfg.roundingInterval, cfg.roundingDirection);
 };
 
+
+/**
+ * The instant of "HH:mm" IST on the IST calendar day containing `refDate`,
+ * optionally offset by extra minutes.
+ *
+ * Every shift boundary in this file used to be built with `d.setHours(h, m)`,
+ * which resolves in the HOST timezone. Production runs on a UTC box, so a
+ * shift starting "07:45" resolved to 07:45 UTC = 13:15 IST -- five and a half
+ * hours after everyone had already arrived. The consequence was silent and
+ * total: `isLatePunchIn` compared a real 07:50 IST arrival against a 13:15 IST
+ * cutoff and said "on time", so NOBODY could ever be marked late, and the
+ * half-day arrival and early-departure cutoffs were wrong by the same offset.
+ *
+ * Nothing here reads the host clock.
+ */
+const istTimeOnDate = (hhmm, refDate, extraMinutes = 0) => {
+  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const ref = new Date(refDate);
+  if (Number.isNaN(ref.getTime())) return null;
+
+  const shifted = new Date(ref.getTime() + IST_OFFSET_MS);
+  const istMidnightMs = Date.UTC(
+    shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate(),
+  ) - IST_OFFSET_MS;
+
+  return new Date(istMidnightMs + (Number(m[1]) * 60 + Number(m[2]) + Number(extraMinutes || 0)) * 60 * 1000);
+};
+
+/** Minutes since IST midnight for an instant. */
+const istMinutesOfDay = (date) => {
+  const s = new Date(new Date(date).getTime() + IST_OFFSET_MS);
+  return s.getUTCHours() * 60 + s.getUTCMinutes();
+};
+
+/** Seconds-within-the-minute of an instant, in IST. */
+const istSecondsOfMinute = (date) => new Date(new Date(date).getTime() + IST_OFFSET_MS).getUTCSeconds();
+
+/**
+ * The start and end instants of the shift OCCURRENCE that `refDate` belongs to.
+ *
+ * For a day shift this is simply start and end on refDate's own IST day. An
+ * OVERNIGHT shift (end <= start) is the interesting case: the occurrence may
+ * have begun the PREVIOUS day. Somebody punching in at 01:00 against a
+ * 22:00-06:00 shift is three hours late for last night's shift, not twenty-one
+ * hours early for tonight's — and every rule built on that boundary (late
+ * arrival, half-day cutoffs, the close time for a forgotten punch-out) gets the
+ * wrong answer if it anchors to the punch's own calendar day.
+ *
+ * Returns null when the shift has no usable times.
+ */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const istShiftOccurrence = (shift, refDate) => {
+  if (!shift || !shift.startTime || !shift.endTime) return null;
+  const start = istTimeOnDate(shift.startTime, refDate);
+  let end = istTimeOnDate(shift.endTime, refDate);
+  if (!start || !end) return null;
+
+  const overnight = end.getTime() <= start.getTime();
+  if (!overnight) return { start, end, overnight: false };
+
+  end = new Date(end.getTime() + DAY_MS);
+
+  // If the reference instant falls before the end of the occurrence that
+  // started YESTERDAY, it belongs to that one.
+  const prevEnd = new Date(end.getTime() - DAY_MS);
+  if (new Date(refDate).getTime() < prevEnd.getTime()) {
+    return { start: new Date(start.getTime() - DAY_MS), end: prevEnd, overnight: true };
+  }
+  return { start, end, overnight: true };
+};
+
+/**
+ * Does this shift count every worked minute, not just those inside its times?
+ *
+ * Only an explicit `true` turns it on: a shift saved before the field existed
+ * carries nothing, and must keep the clamped behaviour it was configured for.
+ */
+const isFlexibleShift = (shift) => shift?.flexibleHours === true;
+
+/** "HH:MM" in IST, for displaying a cutoff back to the employee. */
+const istHHMM = (date) => {
+  const s = new Date(new Date(date).getTime() + IST_OFFSET_MS);
+  return `${String(s.getUTCHours()).padStart(2, '0')}:${String(s.getUTCMinutes()).padStart(2, '0')}`;
+};
+
 /**
  * Was a punch-in late relative to the employee's shift + grace period?
  * Parameterized on punchInDate (not `now`) so it can also validate a
@@ -167,13 +228,48 @@ const applyPunchRounding = (date, label, settings) => {
  */
 const isLatePunchIn = (punchInDate, shift, settings) => {
   if (!shift || !shift.startTime || !punchInDate) return false;
-  const graceMinutes = settings?.attendance?.lateGrace ?? 15;
+  // A flexible shift has no fixed arrival time, so nothing is late.
+  if (isFlexibleShift(shift)) return false;
 
-  const shiftStart = shiftTimeOnDate(shift.startTime, punchInDate);
-  if (!shiftStart) return false;
-  const shiftTime = new Date(shiftStart.getTime() + graceMinutes * 60 * 1000);
+  // The SHIFT's own grace decides, and the tenant value applies only where the
+  // shift sets none. Same resolver, and therefore the same number, the Full Day
+  // bar is built from.
+  //
+  // This read `settings.attendance.lateGrace` unconditionally. With a 5-minute
+  // shift grace and a 15-minute tenant grace, a 09:40 arrival was 5 minutes
+  // short of a Full Day and simultaneously "on time" -- the badge an admin
+  // reads disagreed with the maths that set the pay, between 09:35 and 09:45.
+  //
+  // Lazy require: shift_status requires this file, so a top-level require back
+  // would be a load-time cycle. See determineHalfDayStatus for the same note.
+  const { resolveGraceMs } = require('./shift_status');
+  const graceMinutes = resolveGraceMs(shift, settings).inMs / 60000;
+
+  // Overnight-aware: a 01:00 arrival against a 22:00-06:00 shift is late for
+  // LAST NIGHT'S occurrence, which began at 22:00 yesterday.
+  const occ = istShiftOccurrence(shift, punchInDate);
+  const shiftTime = occ
+    ? new Date(occ.start.getTime() + graceMinutes * 60 * 1000)
+    : istTimeOnDate(shift.startTime, punchInDate, graceMinutes);
+  if (!shiftTime) return false;
 
   return new Date(punchInDate) > shiftTime;
+};
+
+/**
+ * Did the arrival pass the shift's "this much late is a Half Day" line?
+ * Strictly after start + halfDayLateAfterMin (exactly 1h late is still on the
+ * line, 1h00m01s is over it). False when the rule is off or there is no start.
+ */
+const isHalfDayLateArrival = (punchInDate, shift) => {
+  const limit = Number(shift?.halfDayLateAfterMin);
+  if (!(limit > 0) || !shift?.startTime || !punchInDate) return false;
+  if (isFlexibleShift(shift)) return false; // arrival time does not matter on it
+  const occ = istShiftOccurrence(shift, punchInDate);
+  const cutoff = occ
+    ? new Date(occ.start.getTime() + limit * 60 * 1000)
+    : istTimeOnDate(shift.startTime, punchInDate, limit);
+  return !!cutoff && new Date(punchInDate) > cutoff;
 };
 
 /**
@@ -185,44 +281,102 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
   const hdr = settings?.attendance?.halfDayRules || {};
   const hdDeductLunch = hdr.deductLunch !== false; // default true
 
-  // Net worked time (ms). Falls back to a raw punchOut-punchIn diff if no totalWorkMs was tracked.
-  let netWorkMs = totalWorkMs || (punchIn && punchOut ? (new Date(punchOut) - new Date(punchIn)) : 0);
-  if (hdDeductLunch && lunchInTime && lunchOutTime) {
-    const lunchMs = new Date(lunchOutTime) - new Date(lunchInTime);
-    if (lunchMs > 0) netWorkMs = Math.max(0, netWorkMs - lunchMs);
+  // Lazy, to keep the static require graph acyclic: shift_status requires THIS
+  // file, so a top-level require back would be a load-time cycle. Resolved at
+  // call time, which is after both modules are fully loaded.
+  const { requiredWorkMs } = require('./shift_status');
+
+  // Net worked time (ms).
+  //
+  // `totalWorkMs` arrives ALREADY net of lunch -- computeWorkedMs subtracted it
+  // under the day's resolved policy before this was ever called. Deducting the
+  // punched break again here charged it twice: one real day carried 7.74h in
+  // the record and reported 7.61h out of this function, and the 7.61h was what
+  // the punch-out response showed the employee and what the half-day test then
+  // measured. The second deduction only ever belonged to the FALLBACK below,
+  // which is a raw out-minus-in with no policy applied at all.
+  let netWorkMs = totalWorkMs;
+  if (!netWorkMs) {
+    netWorkMs = punchIn && punchOut ? (new Date(punchOut) - new Date(punchIn)) : 0;
+    if (hdDeductLunch && lunchInTime && lunchOutTime) {
+      const lunchMs = new Date(lunchOutTime) - new Date(lunchInTime);
+      if (lunchMs > 0) netWorkMs = Math.max(0, netWorkMs - lunchMs);
+    }
   }
   const netWorkHours = netWorkMs / (1000 * 60 * 60);
 
   let isHalfDay = false;
   const remarkParts = [];
 
+  // A shift carrying grace figures is graded on HOURS, against a bar built
+  // from its own schedule.
+  //
+  //     required = shift span - scheduled lunch - grace in - grace out
+  //     09:30-18:30, 1h lunch, 5m + 5m  ->  7h50m for a Full Day
+  //
+  // These two fields used to trip an automatic half-day on their own: a punch
+  // at 09:35:01 was half a day's pay however long the employee then stayed.
+  // One employee worked 09:44 to 19:21 -- 7.76 net hours against a shift worth
+  // 8.00 -- and was paid half. Across one week, fifty attendance rows produced
+  // three Full Days and no way for anyone to earn a fourth.
+  //
+  // The times still MATTER; they set how wide the bar is. What they no longer
+  // do is decide the day by themselves, so arriving five minutes late and
+  // staying five minutes longer now costs nothing, which is what an admin
+  // setting "5 minutes' grace" believes they have configured.
+  //
+  // A flexible shift is always graded this way, even with no grace set: the
+  // company cut-off below is a clock time, and on a flexible shift the clock
+  // decides nothing.
+  const flexible = isFlexibleShift(shift);
   let hasShiftRules = false;
-  if (shift && (shift.halfDayLatePunchInMin || shift.halfDayEarlyPunchOutMin)) {
+  if (shift && (flexible || shift.halfDayLatePunchInMin || shift.halfDayEarlyPunchOutMin || shift.halfDayMinHours > 0 || shift.halfDayLateAfterMin > 0)) {
     hasShiftRules = true;
 
-    if (shift.halfDayLatePunchInMin && punchIn) {
-      const shiftStart = shiftTimeOnDate(shift.startTime, punchIn);
-      const halfDayPunchInCutoff = new Date(shiftStart.getTime() + shift.halfDayLatePunchInMin * 60 * 1000);
-      if (new Date(punchIn) > halfDayPunchInCutoff) {
-        isHalfDay = true;
-        const cutoffTimeStr = clockStringAfter(shift.startTime, shift.halfDayLatePunchInMin);
-        remarkParts.push(`Late punch-in for shift (after ${cutoffTimeStr})`);
-      }
-    }
-
-    if (shift.halfDayEarlyPunchOutMin && punchIn && punchOut) {
-      const shiftStart = shiftTimeOnDate(shift.startTime, punchIn);
-      let shiftEnd = shiftTimeOnDate(shift.endTime, punchIn);
-      if (shiftEnd < shiftStart) {
-        shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+    const requiredMs = requiredWorkMs(shift, settings, punchIn ? new Date(punchIn) : new Date());
+    if (requiredMs === null) {
+      // Grace figures set on a shift with no usable start/end. Nothing to
+      // measure against, so fall through to the company rules below rather
+      // than passing or failing the day on a bar that does not exist.
+      hasShiftRules = false;
+    } else {
+      isHalfDay = netWorkMs < requiredMs;
+      if (isHalfDay) {
+        const fmt = (ms) => `${Math.floor(ms / 3600000)}h ${String(Math.round((ms % 3600000) / 60000)).padStart(2, '0')}m`;
+        remarkParts.push(`Short hours for shift (${fmt(netWorkMs)} of ${fmt(requiredMs)})`);
       }
 
-      const halfDayPunchOutCutoff = new Date(shiftEnd.getTime() - shift.halfDayEarlyPunchOutMin * 60 * 1000);
-
-      if (new Date(punchOut) < halfDayPunchOutCutoff) {
+      // Unlike the cut-off below, this one IS a verdict: the shift says an
+      // arrival this late is a Half Day however long the person then stays.
+      if (isHalfDayLateArrival(punchIn, shift)) {
         isHalfDay = true;
-        const cutoffTimeStr = clockStringAfter(shift.endTime, -shift.halfDayEarlyPunchOutMin);
-        remarkParts.push(`Early punch-out for shift (before ${cutoffTimeStr})`);
+        const lateLimit = istTimeOnDate(shift.startTime, punchIn, shift.halfDayLateAfterMin);
+        remarkParts.push(`Late arrival over ${shift.halfDayLateAfterMin} min${lateLimit ? ` (after ${istHHMM(lateLimit)})` : ''}`);
+      }
+
+      // Kept as context, never as a verdict. An admin looking at a half-day
+      // still wants to see that it began with a late arrival. Not on a
+      // flexible shift: there, arriving late or leaving early is not a reason.
+      if (!flexible && shift.halfDayLatePunchInMin && punchIn) {
+        const inOcc = istShiftOccurrence(shift, punchIn);
+        const lateCutoff = inOcc
+          ? new Date(inOcc.start.getTime() + shift.halfDayLatePunchInMin * 60 * 1000)
+          : istTimeOnDate(shift.startTime, punchIn, shift.halfDayLatePunchInMin);
+        if (lateCutoff && new Date(punchIn) > lateCutoff) {
+          remarkParts.push(`Late punch-in for shift (after ${istHHMM(lateCutoff)})`);
+        }
+      }
+
+      if (!flexible && shift.halfDayEarlyPunchOutMin && punchIn && punchOut) {
+        // Resolved as one occurrence so an overnight shift's end lands on the
+        // correct day relative to the punch that is being judged.
+        const outOcc = istShiftOccurrence(shift, punchIn);
+        const earlyCutoff = outOcc
+          ? new Date(outOcc.end.getTime() - shift.halfDayEarlyPunchOutMin * 60 * 1000)
+          : null;
+        if (earlyCutoff && new Date(punchOut) < earlyCutoff) {
+          remarkParts.push(`Early punch-out for shift (before ${istHHMM(earlyCutoff)})`);
+        }
       }
     }
   }
@@ -238,9 +392,8 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
     let isLateArrival = false;
     if (punchIn) {
       const [cutH, cutM] = hdCutoff.split(':').map(Number);
-      const pi = new Date(punchIn);
-      const piMins = pi.getHours() * 60 + pi.getMinutes();
-      const piSecs = pi.getSeconds();
+      const piMins = istMinutesOfDay(punchIn);
+      const piSecs = istSecondsOfMinute(punchIn);
       const cutMins = cutH * 60 + cutM;
       isLateArrival = piMins > cutMins || (piMins === cutMins && piSecs > 0);
     }
@@ -277,6 +430,46 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
 };
 
 /**
+ * Fragments this module generates, so a re-grade can replace them.
+ *
+ * Every one describes the day AS MEASURED AT THE MOMENT IT WAS WRITTEN, and a
+ * day gets measured several times -- once per session close, again when the
+ * 04:00 job or the geofence engine closes a forgotten punch, again on a
+ * regularization. The appenders only guarded against writing the SAME sentence
+ * twice, so a superseded one simply stayed.
+ *
+ * Observed 2026-09-18: an employee closed a session at 17:15, earning
+ * "Early punch-out for shift (before 18:25)", then punched straight back in and
+ * worked to 18:30. The day was no longer an early finish, the status was
+ * re-derived correctly -- and the remark still said it was, which is the line
+ * an admin reads when deciding whether to trust the row.
+ */
+const GRADING_REMARK_PATTERNS = [
+  /^Short hours for shift \(/i,
+  /^Late punch-in for shift \(/i,
+  /^Early punch-out for shift \(/i,
+  /^Late arrival \(after /i,
+  /^Late arrival over /i,
+  /^Short hours \(/i,
+  /^Short hours across sessions$/i,
+];
+
+/**
+ * Drop every previously-generated grading fragment, keeping everything a human
+ * or another subsystem wrote ('Work From Home', 'Auto punch-out (left branch
+ * geo-fence)', an admin's note). Order of the survivors is preserved, because
+ * the fragments read as a narrative of the day.
+ */
+const stripGradingRemarks = (remarks) => {
+  if (typeof remarks !== 'string' || !remarks) return '';
+  return remarks
+    .split('|')
+    .map((frag) => frag.trim())
+    .filter((frag) => frag && !GRADING_REMARK_PATTERNS.some((re) => re.test(frag)))
+    .join(' | ');
+};
+
+/**
  * Parses a biometric terminal's own timestamp ("YYYY-MM-DD HH:MM:SS", as sent
  * in each tab-separated ATTLOG line) into a real Date.
  *
@@ -292,6 +485,48 @@ const determineHalfDayStatus = ({ punchIn, punchOut, totalWorkMs, lunchInTime, l
  * device clock degrades to "no tap time" rather than writing a punch into the
  * distant past.
  */
+/**
+ * Parse a wall-clock string from a client as IST.
+ *
+ * An `<input type="datetime-local">` submits "2026-09-16T00:00" -- a wall clock
+ * with NO timezone. ECMAScript resolves that form against the *host's* local
+ * time, so handing it to `new Date()` (or letting Mongoose cast it) means the
+ * stored instant depends on the server's timezone. Production runs with TZ
+ * unset, i.e. UTC, so "18:30" from a user in India was stored as 18:30Z --
+ * 00:00 IST the next morning. Three regularization requests pending on
+ * 2026-09-17 carried a punch-out on the day AFTER the day they corrected.
+ *
+ * Every user of this product is in IST, so a bare wall clock means IST and
+ * nothing else. A value that already carries an offset or a trailing Z is a
+ * real instant and is passed through untouched.
+ *
+ * Returns null for anything unparseable, so callers can reject explicitly
+ * rather than storing an Invalid Date.
+ */
+const parseIstWallClock = (value) => {
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+    if (typeof value !== 'string' || !value.trim()) return null;
+
+    const raw = value.trim();
+    // Already an instant: ...Z, +05:30, -0800.
+    if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)) {
+        const d = new Date(raw);
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (!m) {
+        const d = new Date(raw);
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    const [, y, mo, da, h, mi, se] = m;
+    // Build the instant via UTC then shift back by the IST offset, so the
+    // result is independent of the host timezone.
+    const asUtc = Date.UTC(+y, +mo - 1, +da, +h, +mi, se ? +se : 0, 0);
+    return new Date(asUtc - IST_OFFSET_MS);
+};
+
 const MAX_TAP_DRIFT_MS = 7 * 24 * 60 * 60 * 1000;
 
 const parseDeviceTimestamp = (raw, now = new Date(), offsetMinutes = 0) => {
@@ -313,4 +548,4 @@ const parseDeviceTimestamp = (raw, now = new Date(), offsetMinutes = 0) => {
   return parsed;
 };
 
-module.exports = { DAY_LABELS, isWeeklyOff, toLocalDateKey, isLatePunchIn, determineHalfDayStatus, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, shiftTimeOnDate, clockStringAfter, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };
+module.exports = { isFlexibleShift, isHalfDayLateArrival, DAY_LABELS, isWeeklyOff, toLocalDateKey, parseIstWallClock, isLatePunchIn, determineHalfDayStatus, stripGradingRemarks, istStartOfDay, istEndOfDay, istDateKey, istCalendarDate, istMonthRange, istTimeOnDate, istShiftOccurrence, istMinutesOfDay, istSecondsOfMinute, istHHMM, roundPunchTime, applyPunchRounding, parseDeviceTimestamp, MAX_TAP_DRIFT_MS };

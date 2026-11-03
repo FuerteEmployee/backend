@@ -4,24 +4,32 @@ const { notFound, errorHandler } = require("./middleware/error.middleware");
 
 const app = express();
 
-// Body parser
-app.use(express.json());
+
 
 // Enable CORS
 const allowedOrigins = [
     "https://botcrm.beontimeofficial.com",
+    // Staging web + its own API. These lived ONLY on the staging server for a
+    // while, added by hand and never committed, so the first source deploy that
+    // overwrote app.js silently removed them and every login from
+    // staging.beontimeofficial.com failed CORS preflight. Keeping them here is
+    // what stops that happening again -- an origin the product genuinely uses
+    // belongs in the repo, not in one machine's working copy.
+    "https://staging.beontimeofficial.com",
+    "https://staging-api.beontimeofficial.com",
     "https://gray-crab-756474.hostingersite.com",
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:4173",
     "https://api.beontimeofficial.com",
 
-    // BOTLens (camera attendance app) — integration disabled, origins closed off
-    // "http://localhost:8000",
-    // "https://localhost:8000",
-    // "http://localhost:10000",
-    // "https://localhost:10000",
-    // "https://botlens.beontimeofficial.com",
+    // BOTLens (camera attendance app) — local dev and the live deployment
+    "http://localhost:8000",
+    "https://localhost:8000",
+    "http://localhost:10000",
+    "https://localhost:10000",
+    "https://stagingbotlens.beontimeofficial.com", // the staging kiosk (talks to the staging API)
+    "https://botlens.beontimeofficial.com",
 
     // Capacitor native apps (Android/iOS WebView origins)
     "https://localhost",
@@ -41,14 +49,22 @@ app.use(
     }),
 );
 
+
+// Body parser. Punch-in/out requests carry a base64 selfie that regularly
+// exceeded the 100kb default, so allow room for full-resolution photos.
+app.use(express.json({ limit: "5mb" }));
+
+
 // Mount routers
 app.use("/api/users", require("./routes/user_routes"));
 app.use("/api/departments", require("./routes/department_routes"));
 app.use("/api/branches", require("./routes/branch_routes"));
 app.use("/api/attendance", require("./routes/attendance_routes"));
-// app.use("/api/device/attendance", require("./routes/device_attendance_routes"));
+app.use("/api/device/attendance", require("./routes/device_attendance_routes"));
 // Company-admin view of their own biometric machines (read + rename only).
 app.use("/api/devices", require("./routes/device_routes"));
+// Face kiosk (BOTLens): kiosk keys, faces, sightings as taps. routes/lens_routes.js
+app.use("/api/lens", require("./routes/lens_routes"));
 // Biometric devices (eSSL/ZKTeco ADMS protocol) hit /iclock/* directly at the
 // domain root — the path is hardcoded in device firmware, not configurable.
 app.use("/iclock", require("./routes/iclock_routes"));
@@ -84,6 +100,25 @@ app.use(
         maxAge: "1y",
         immutable: true,
         fallthrough: false,
+    }),
+);
+
+// Signed APKs, on the same terms as bundles and for the same reasons: public,
+// immutable (the filename carries the versionCode), and reachable without a
+// session because the system browser — not the app — performs the download,
+// and it carries none of the app's headers.
+app.use(
+    "/apks",
+    express.static(require("path").join(__dirname, "..", "apks"), {
+        maxAge: "1y",
+        immutable: true,
+        fallthrough: false,
+        setHeaders: (res) => {
+            // Android's download manager decides what to do with a file from
+            // its Content-Type. Served as the default octet-stream some devices
+            // save it as a text file, which then cannot be installed.
+            res.setHeader("Content-Type", "application/vnd.android.package-archive");
+        },
     }),
 );
 

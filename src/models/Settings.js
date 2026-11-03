@@ -73,6 +73,14 @@ const SettingsSchema = new mongoose.Schema({
         reqMins: { type: Number, default: 0 },
         halfDayHours: { type: Number, default: 4 },
         allowMultiplePunches: { type: Boolean, default: false },
+        // When the phone records an employee's location (only for people whose
+        // tracking is switched on, per employee or per department):
+        //   on_duty -- from punch-in to punch-out (the default, and the only
+        //              behaviour before 2026-09-30);
+        //   always  -- all the time, including after work. Needs APK >= 17: older
+        //              phones fall back to on_duty on their own (the web layer asks
+        //              the native side whether it supports this before using it).
+        trackingMode: { type: String, enum: ['on_duty', 'always'], default: 'on_duty' },
         // Minutes of grace before a punch-in counts as "late". Was read at
         // attendance_controller but previously missing here (Mongoose strict
         // mode silently dropped it) — now declared so it persists.
@@ -104,12 +112,41 @@ const SettingsSchema = new mongoose.Schema({
         otThreshold: { type: Number, default: 9 },
         weeklyOT: { type: Number, default: 45 },
         otMultiplier: { type: Number, default: 1.5 },
+        // How many days back an EMPLOYEE may reach when asking to correct a
+        // missed punch-out. Admins are not bound by it. Kept short on purpose:
+        // the further away the day, the less anyone actually remembers, and a
+        // correction nobody can verify is a guess with an approval stamp on it.
+        correctionWindowDays: { type: Number, default: 7 },
         // Minimum gap between two taps by the same employee on a biometric
         // terminal. A second tap inside this window is treated as an accidental
         // repeat and discarded (still stored, flagged, so it stays auditable) —
         // without it, someone arriving at 09:30 who presses twice gets a
         // punch-in and an instant "lunch break started". 0 disables.
         punchDebounceSeconds: { type: Number, default: 120 },
+        // Minimum gap between consecutive punches made in the APP, where
+        // nothing debounces them -- punchDebounceSeconds above covers device
+        // taps only, and never reaches these handlers.
+        //
+        // `lunchMinGapSeconds` is how long a break must last (lunch-in to
+        // lunch-out). `workMinGapSeconds` is how long the work either side of
+        // it must last: punch-in to lunch-in, and lunch-out to punch-out.
+        // Both 0 to disable; unset means 60.
+        //
+        // These were read by attendance_controller before they were declared
+        // here, so strict mode dropped every write and the value was pinned at
+        // the 60s fallback no matter what an admin saved. That is the failure
+        // mode described in CLAUDE.md under "Settings fields that don't save".
+        lunchMinGapSeconds: { type: Number, default: 60 },
+        workMinGapSeconds: { type: Number, default: 60 },
+        // Refuse a NEW punch-in once the employee's shift has ended. Punch-out
+        // is never blocked. Default on: a punch-in after shift end can only
+        // produce a zero-length, unpayable day (see attendance_controller's
+        // punchIn). A tenant running 24/7, or one whose shift times are
+        // nominal rather than enforced, sets this false.
+        blockPunchInAfterShiftEnd: { type: Boolean, default: true },
+        // Minutes past shift end during which a punch-in is still accepted --
+        // for a site where people genuinely start a few minutes over.
+        punchInGraceAfterShiftEndMins: { type: Number, default: 0 },
         // Punch-time rounding applied before late/half-day/payroll math runs
         // (see attendance_helpers.js's roundPunchTime).
         roundingInterval: { type: Number, default: 0 }, // minutes; 0 = off
@@ -221,6 +258,34 @@ const SettingsSchema = new mongoose.Schema({
             unpaidLeave: { type: Number, default: 0, min: 0, max: 1 },
         },
     },
+
+    // Leave policy.
+    leave: {
+        // When the per-type quota (LeaveType.totalDays) starts again.
+        //   'lifetime'       -> never: every leave ever taken counts (the
+        //                       behaviour before this field existed, and the
+        //                       default so no balance moves on deploy)
+        //   'calendar_year'  -> 1 Jan - 31 Dec
+        //   'financial_year' -> 1 Apr - 31 Mar (Indian FY)
+        // Period edges are IST calendar days. No carry-forward: unused days
+        // do not roll into the next period. See utils/leave_balance.js.
+        balancePeriod: {
+            type: String,
+            enum: ['lifetime', 'calendar_year', 'financial_year'],
+            default: 'lifetime',
+        },
+    },
+
+    // What an EMPLOYEE may change about themselves in the app.
+    employeeSelfService: {
+        // Bank details, PAN, Aadhaar (numbers and scans) and legal name.
+        // OFF by default: salary is paid to whatever account is on file, so
+        // letting anyone with a (possibly borrowed) phone change it without HR
+        // is how salary gets diverted. Enforced in user_controller.updateProfile;
+        // admin edits through the employee form are not affected.
+        allowSensitiveEdits: { type: Boolean, default: false },
+    },
+
     leadFields: [{
         key: { type: String, required: true },
         label: { type: String, required: true },

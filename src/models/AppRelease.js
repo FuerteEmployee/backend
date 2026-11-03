@@ -31,7 +31,9 @@ const AppReleaseSchema = new mongoose.Schema({
     // in pilotAdminIds — a staged rollout. Normally a paid cloud feature;
     // trivial here because the update check reaches our own backend, which
     // knows which tenant is asking (the app sets custom_id after login).
-    channel: { type: String, enum: ['production', 'pilot'], default: 'pilot', index: true },
+    // 'v2' / 'v2-pilot' are the same two audiences for the current app in
+    // production, kept apart from the frozen previous release (utils/ota_channels.js).
+    channel: { type: String, enum: ['production', 'pilot', 'v2', 'v2-pilot'], default: 'pilot', index: true },
     pilotAdminIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
 
     // Lets a bad release be pulled instantly without deleting the record —
@@ -45,5 +47,17 @@ const AppReleaseSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 AppReleaseSchema.index({ channel: 1, enabled: 1, createdAt: -1 });
+
+// Never reuse an OTA version (CLAUDE.md). The plugin decides by comparing the
+// version string, so two rows sharing one make "which bundle is this phone
+// running" unanswerable, and a phone already on that version never downloads
+// the second one at all. publishBundle.js checks this too; the guard lives here
+// so every other way a row gets created is held to it. Not a unique index:
+// building one on a live collection would fail on any existing duplicate.
+AppReleaseSchema.pre('validate', async function refuseReusedVersion() {
+    if (!this.isNew && !this.isModified('version')) return;
+    const clash = await this.constructor.exists({ version: this.version, _id: { $ne: this._id } });
+    if (clash) this.invalidate('version', `Version ${this.version} has already been published. Bump the version.`);
+});
 
 module.exports = mongoose.model('AppRelease', AppReleaseSchema);

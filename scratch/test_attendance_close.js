@@ -25,7 +25,10 @@ async function reset() {
     await Promise.all([Attendance.deleteMany({}), Settings.deleteMany({}), Shift.deleteMany({}), User.deleteMany({})]);
 }
 
-async function seed({ date = YESTERDAY, endTime = '17:10', punchIn = localAt(YESTERDAY, '09:00'), withShift = true } = {}) {
+async function seed({
+    date = YESTERDAY, endTime = '17:10', punchIn = localAt(YESTERDAY, '09:00'), withShift = true,
+    sessions = null,
+} = {}) {
     const admin = await User.create({ name: 'Close Admin', phone: '9000200001', role: 'admin', isActive: true });
     const shift = withShift ? await Shift.create({ adminId: admin._id, name: 'Day', startTime: '09:00', endTime }) : null;
     const employee = await User.create({
@@ -35,7 +38,7 @@ async function seed({ date = YESTERDAY, endTime = '17:10', punchIn = localAt(YES
     await Settings.create({ adminId: admin._id, attendance: { minLunch: 0 } });
     const attendance = await Attendance.create({
         adminId: admin._id, employeeId: employee._id, date, punchIn, status: 'present',
-        shifts: [{ punchIn, punchOut: null }],
+        shifts: sessions || [{ punchIn, punchOut: null }],
     });
     return { admin, employee, attendance, punchIn };
 }
@@ -53,6 +56,34 @@ async function seed({ date = YESTERDAY, endTime = '17:10', punchIn = localAt(YES
     const expectedEnd = localAt(YESTERDAY, '17:10');
     ok('open yesterday session closes at its shift end', result.closed === 1 && new Date(attendance.shifts[0].punchOut).getTime() === expectedEnd.getTime(), String(attendance.shifts[0].punchOut));
     ok('system close records reason and source', attendance.shifts[0].closeReason === 'shift_end' && attendance.shifts[0].punchOutSource === 'system', JSON.stringify(attendance.shifts[0]));
+    ok('single-session close mirrors the root punchOut',
+        attendance.punchOut !== null && new Date(attendance.punchOut).getTime() === expectedEnd.getTime(),
+        String(attendance.punchOut));
+
+    // A day whose LAST session is the open one. The root punchOut is null
+    // because punch-in clears it for every new session; the close has to put it
+    // back or this row matches the job's own open-row query forever and is
+    // re-examined every night. Three real rows on 2026-09-16 were stuck here.
+    console.log('\n- multi-session day mirrors the root -');
+    await reset();
+    s = await seed({
+        sessions: [
+            { punchIn: localAt(YESTERDAY, '09:00'), punchOut: localAt(YESTERDAY, '12:00'), closeReason: 'manual' },
+            { punchIn: localAt(YESTERDAY, '13:00'), punchOut: null },
+        ],
+    });
+    result = await closeForgottenPunches({ now: NOW });
+    attendance = await Attendance.findById(s.attendance._id).lean();
+    ok('the trailing open session is the one closed',
+        result.closed === 1 && attendance.shifts[1].closeReason === 'shift_end',
+        JSON.stringify(attendance.shifts));
+    ok('closing session 2 mirrors the root punchOut (not left null)',
+        attendance.punchOut !== null
+        && new Date(attendance.punchOut).getTime() === new Date(attendance.shifts[1].punchOut).getTime(),
+        JSON.stringify({ root: attendance.punchOut, session2: attendance.shifts[1].punchOut }));
+    ok('the row no longer matches the job as open on a second run',
+        (await closeForgottenPunches({ now: NOW })).examined === 0,
+        'row still looks open to the nightly job');
 
     await reset();
     s = await seed({ date: TODAY, punchIn: localAt(TODAY, '22:00') });
@@ -70,6 +101,26 @@ async function seed({ date = YESTERDAY, endTime = '17:10', punchIn = localAt(YES
         new Date(attendance.shifts[0].punchOut).getTime() >= new Date(attendance.shifts[0].punchIn).getTime(),
         JSON.stringify(attendance.shifts[0]));
     ok('late punch-in close has non-negative total work', attendance.totalWorkMs >= 0, String(attendance.totalWorkMs));
+
+    console.log('\n- overnight shift end belongs to the next IST day -');
+    await reset();
+    const overnightIn = localAt(YESTERDAY, '22:00');
+    s = await seed({ endTime: '06:00', punchIn: overnightIn });
+    result = await closeForgottenPunches({ now: NOW });
+    attendance = await Attendance.findById(s.attendance._id).lean();
+    const overnightEnd = new Date(localAt(YESTERDAY, '06:00').getTime() + 24 * 60 * 60 * 1000);
+    ok('a 22:00–06:00 forgotten session closes at 06:00 on the following IST day',
+        result.closed === 1 && new Date(attendance.shifts[0].punchOut).getTime() === overnightEnd.getTime(),
+        JSON.stringify({ punchIn: attendance.shifts[0].punchIn, punchOut: attendance.shifts[0].punchOut, expected: overnightEnd }));
+
+    await reset();
+    s = await seed({ endTime: '06:00', punchIn: overnightIn });
+    const fourAmIst = new Date('2026-09-10T22:30:00.000Z');
+    result = await closeForgottenPunches({ now: fourAmIst });
+    attendance = await Attendance.findById(s.attendance._id).lean();
+    ok('the 04:00 IST job leaves a 22:00–06:00 session open until its end has actually passed',
+        result.closed === 0 && attendance.shifts[0].punchOut === null,
+        JSON.stringify({ result, punchOut: attendance.shifts[0].punchOut }));
 
     console.log('\n- dry run and fallback -');
     await reset();

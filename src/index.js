@@ -11,12 +11,29 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
     app.listen(PORT, () => {
         console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 
+        // Load the face models now, so the first app punch with a registered
+        // face is not the one that waits for them (utils/face_match.js).
+        require("./utils/face_match").warmUp()
+            .then(() => console.log("[face] punch face check ready"))
+            .catch((err) => console.error("[face] face models not ready; punches by registered faces will be refused until they are:", err.message));
+
         // Connect to Database in background
         connectDB()
             .then(() => {
                 // Long-running host (local / PM2 / EC2): run scheduled jobs in-process.
                 // On Vercel serverless the same jobs run via /api/cron instead.
-                startScheduler();
+                //
+                // DISABLE_SCHEDULER exists for developer machines pointed at a
+                // SHARED database. These jobs write: closeForgottenPunches()
+                // punches people out for yesterday. A laptop running against
+                // staging would do that a second time, concurrently with the
+                // real server and possibly from half-edited code. Set it in any
+                // .env that is not the machine that owns the deployment.
+                if (String(process.env.DISABLE_SCHEDULER).toLowerCase() === 'true') {
+                    console.log('[scheduler] disabled via DISABLE_SCHEDULER -- no jobs registered');
+                } else {
+                    startScheduler();
+                }
             })
             .catch(err => {
                 console.error("Failed to connect to database:", err);

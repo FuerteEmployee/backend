@@ -41,8 +41,28 @@ const TrackingSchema = new mongoose.Schema({
     // without this the difference between "left the building" and "phone died"
     // is unknowable after the fact.
     batteryLevel: { type: Number, default: null },
-    // Platform activity hint (still / walking / in_vehicle / unknown).
+    // Platform activity hint (still / walking / running / vehicle / cycling /
+    // moving / stationary / unknown).
     activityType: { type: String, default: null },
+
+    // ── How activityType was arrived at ──────────────────────────────────────
+    //
+    // 'sensor'  Activity Recognition read the accelerometer. Trustworthy: a
+    //           phone lying on a desk produces no acceleration, however far its
+    //           reported coordinates wander.
+    // 'speed'   Inferred from the GPS speed field, which on a stationary handset
+    //           is computed from the very drift it is supposed to explain.
+    //           Measured 2026-09-18: a phone on a desk reported 191 of 568 fixes
+    //           as "moving" at up to 24.2 m/s, while an employee who genuinely
+    //           walked 711 m was called "stationary" for 137 of 162 fixes.
+    //
+    // Recorded rather than assumed because both arrive at once: every APK in the
+    // field sends speed-derived labels and will until it is replaced. Without
+    // this the server cannot tell a measured 'still' from a guessed one and
+    // would have to distrust both, wasting the signal entirely.
+    activitySource: { type: String, enum: [null, 'sensor', 'speed'], default: null },
+    // 0-100, as reported by Play Services. 0 when unknown.
+    activityConfidence: { type: Number, default: null },
 
     // Which punch session this fix belongs to, when the client knows. Lets a
     // route be reconstructed per session on a multi-session day rather than
@@ -51,6 +71,17 @@ const TrackingSchema = new mongoose.Schema({
 
     // How the fix reached us: 'app' = foreground WebView, 'background' = the
     // native foreground service, 'ping' = an admin-requested immediate fix.
+    // This coordinate was already reported by this employee recently, so it
+    // is the same underlying Location object re-delivered rather than a new
+    // observation — the phone had no fresh GPS and handed back its cache.
+    //
+    // Stored rather than dropped: the map trace and the audit trail both want
+    // every point the device sent. But a repeat must never VOTE in a geofence
+    // decision, because five copies of one reading are one observation, and a
+    // medoid over them lands on the repeat. That is the exact mechanism behind
+    // the reference implementation's 84 wrong punch-outs.
+    cached: { type: Boolean, default: false },
+
     source: {
         type: String,
         enum: ['app', 'background', 'ping'],

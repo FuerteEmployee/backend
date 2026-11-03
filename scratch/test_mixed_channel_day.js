@@ -35,6 +35,15 @@ const ok = (name, cond, extra = '') => {
 
 let adminId, employeeId, shiftId, branchId;
 
+// App punches now require a selfie, and a failed upload fails the punch (see
+// resolvePunchPhoto in attendance_controller). This whole file runs against
+// mongodb-memory-server precisely so it needs no network, so stub the uploader
+// rather than make a real Cloudinary round-trip per punch. Mutating the shared
+// cloudinary object works because the controller captured the same reference.
+const { cloudinary } = require(path.join(SRC, 'config/cloudinary'));
+cloudinary.uploader.upload = async () => ({ secure_url: 'https://example.test/selfie.jpg' });
+const SELFIE = 'data:image/jpeg;base64,TEST';
+
 /** Mock res capturing the handler reply, mirroring iclock's callHandler. */
 function mockRes() {
     const r = { statusCode: 200, body: null };
@@ -45,10 +54,17 @@ function mockRes() {
 
 /** Invoke a real handler the way one of the three channels would. */
 async function call(handler, { source = 'app', body = {} } = {}) {
+    const isDevice = source !== 'app';
+    // Only the app channel carries a photo -- terminals and the camera service
+    // have none to send and are exempt server-side. Injected here so each app
+    // case exercises the selfie gate rather than being rejected by it, and so
+    // an explicit `photo` in a case still wins.
+    const needsSelfie = !isDevice && (handler === ctrl.punchIn || handler === ctrl.punchOut);
     const req = {
-        adminId, userId: employeeId, body,
-        isDevicePunch: source !== 'app',
-        deviceSource: source === 'app' ? undefined : source,
+        adminId, userId: employeeId,
+        body: needsSelfie ? { photo: SELFIE, ...body } : body,
+        isDevicePunch: isDevice,
+        deviceSource: isDevice ? source : undefined,
     };
     const res = mockRes();
     await handler(req, res);
@@ -90,7 +106,23 @@ const settle = () => new Promise((r) => setTimeout(r, 150));
     employeeId = emp._id;
     // Second and later sessions are opt-in per tenant; without this the
     // re-punch below is refused and part B would silently test nothing.
-    await Settings.create({ adminId, attendance: { allowMultiplePunches: true } });
+    // The minimum-gap gates are switched OFF for this tenant on purpose. This
+    // file is about WHICH CHANNEL each punch is attributed to, and it makes a
+    // whole day's punches in the same millisecond to get there. Real gaps would
+    // mean real sleeps, and the gates already have their own coverage in
+    // scratch/test_min_punch_gap.js.
+    //
+    // Without this the file is red: the lunch gate (which predates the other
+    // two) rejected the instant lunch-out, so "camera recorded lunch in + out"
+    // and both evidence-row assertions failed and had been failing.
+    await Settings.create({
+        adminId,
+        attendance: {
+            allowMultiplePunches: true,
+            lunchMinGapSeconds: 0,
+            workMinGapSeconds: 0,
+        },
+    });
 
     const atHQ = { address: 'HQ Rajkot', location: { lat: 22.3039, lng: 70.8022 } };
 

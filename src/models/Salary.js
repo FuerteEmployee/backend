@@ -15,9 +15,28 @@ const SalarySchema = new mongoose.Schema({
         enum: ['paid', 'pending', 'final', 'review'],
         default: 'pending'
     },
+
+    // ── Payment, recorded as fact rather than inferred from `status` ─────────
+    //
+    // `status` is RECOMPUTED from scratch on every payroll run
+    // (calculateAndSaveSalary derives it from "is this the current month?"), so
+    // for as long as it was the only record of a payment, a regenerate silently
+    // rewrote 'paid' to 'pending' and there was afterwards no way to tell that
+    // anyone had ever been paid -- not flagged, not archived, not derivable.
+    //
+    // These two fields are what make that recoverable: they are written once,
+    // when a human marks the row paid, and the generator is required to carry
+    // them across untouched. A row with a `paidAt` has been paid, whatever
+    // `status` currently says.
+    paidAt: { type: Date, default: null },
+    paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    // `included: false` marks a line shown on the slip but NOT part of the
+    // net (a deduction that is only listed, an allowance paid on top). It was
+    // missing here, so strict mode dropped it on save and the slip showed every
+    // such line as if it had been deducted.
     breakdown: {
-        earnings: [{ name: String, amount: Number }],
-        deductions: [{ name: String, amount: Number }]
+        earnings: [{ name: String, amount: Number, included: Boolean }],
+        deductions: [{ name: String, amount: Number, included: Boolean }]
     },
     employmentType: { type: String, enum: ['monthly', 'daily', 'hourly'], default: 'monthly' },
     remarks: { type: String },
@@ -33,6 +52,10 @@ const SalarySchema = new mongoose.Schema({
         holiday: { type: Number, default: 0 },
         absent: { type: Number, default: 0 },
         unpaidLeave: { type: Number, default: 0 },
+        // Days the attendance system could not grade (the engine's ninth
+        // bucket). It was missing here, so the count was dropped on save and a
+        // record held for review could not say how many days caused it.
+        needsReview: { type: Number, default: 0 },
     },
     payableDays: { type: Number },
     totalDaysInWindow: { type: Number },

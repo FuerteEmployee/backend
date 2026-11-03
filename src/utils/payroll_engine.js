@@ -12,19 +12,39 @@
 // applied by the caller (salary_controller.computeSalary).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { isWeeklyOff, toLocalDateKey, istDateKey } = require('./attendance_helpers');
+const { isWeeklyOff, toLocalDateKey, istDateKey, istCalendarDate } = require('./attendance_helpers');
 
-const BUCKETS = ['present', 'wfh', 'halfDay', 'paidLeave', 'weeklyOff', 'holiday', 'absent', 'unpaidLeave'];
+// 'needsReview' is a ninth bucket, added so an unmeasurable day still lands in
+// exactly one bucket and the day-sum invariant continues to hold. It carries no
+// pay weight: a day nobody has adjudicated must not quietly earn money, and must
+// not quietly cost it either. validateSalary refuses to pass a run containing
+// any, so the figure never reaches a payslip unreviewed.
+const BUCKETS = ['present', 'wfh', 'halfDay', 'paidLeave', 'weeklyOff', 'holiday', 'absent', 'unpaidLeave', 'needsReview'];
 
 // Defaults that reproduce TODAY's pay weighting for buckets that exist today.
 const LEGACY_DEFAULT_WEIGHTS = {
     present: 1, wfh: 1, halfDay: 0.5, paidLeave: 1,
     weeklyOff: 1, holiday: 1, absent: 0, unpaidLeave: 0,
+    // Zero PENDING ADJUDICATION, not zero as a verdict. validateSalary refuses
+    // any run containing these, so the figure is never finalised while the
+    // weight still applies. Stated explicitly rather than relying on the
+    // lookup defaulting to 0, so the intent survives the next reader.
+    needsReview: 0,
 };
 
 // Parse a 'YYYY-MM-DD' string (or Date) as a LOCAL date (no UTC shift).
+//
+// A stored Date (a Leave's startDate, an employee's joiningDate) is read as
+// the IST calendar day it falls on. Reading it with the host's own getters
+// made the answer depend on the server's timezone: a date saved at IST
+// midnight (18:30 UTC the day before) read as the PREVIOUS day on a UTC
+// host. istDateKey gives the same day for both conventions in use -- UTC
+// midnight (05:30 IST, same date) and IST midnight -- on any host.
 function parseLocalDate(s) {
-    if (s instanceof Date) return new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    if (s instanceof Date) {
+        const [y, m, d] = istDateKey(s).split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
     const [y, m, d] = String(s).slice(0, 10).split('-').map(Number);
     return new Date(y, (m || 1) - 1, d || 1);
 }
@@ -94,6 +114,18 @@ function workedBucketFromAttendance(rec) {
         return isWfh ? 'wfh' : 'present';
     }
     if (rec.status === 'half-day') return 'halfDay';
+
+    // 'needs_review' is NOT absence. It means the day carries a real punch but
+    // could not be measured -- a missing punch-out, an unresolvable shift.
+    //
+    // Falling through to null here buckets it as `absent`, which pays zero. That
+    // is precisely the harm the status was introduced to prevent: it would turn
+    // "we could not work out what this person did" into "this person did not
+    // come to work", silently, at full cost to them. The day is instead counted
+    // as unmeasured and the whole run is flagged so a human resolves it before
+    // anyone is paid from it.
+    if (rec.status === 'needs_review') return 'needsReview';
+
     return null; // explicit 'absent' or no meaningful work
 }
 
@@ -122,12 +154,20 @@ function buildLeaveMap(leaves, leaveTypesById, year, month) {
         const lt = leaveTypesById ? leaveTypesById[String(lv.leaveTypeId)] : null;
         const isPaid = lt ? lt.isPaid !== false : true; // unknown type → treat as paid
         const payWeight = lt && lt.payWeight != null ? lt.payWeight : null;
+        // How much of the DAY this leave covers, as opposed to payWeight, which
+        // is how much of a day the leave TYPE pays. They multiply: a half day of
+        // a type that pays 0.5 is worth 0.25 of a day.
+        const portionWeight = lv.dayPortion && lv.dayPortion !== 'full' ? 0.5 : 1;
         let cur = parseLocalDate(lv.startDate);
         const last = parseLocalDate(lv.endDate || lv.startDate);
         let guard = 0;
         while (cur <= last && guard < 400) {
             if (cur >= monthStart && cur <= monthEnd) {
-                map.set(toLocalDateKey(cur), { isPaid, payWeight, leaveTypeId: lv.leaveTypeId });
+                map.set(toLocalDateKey(cur), {
+                    isPaid, payWeight, portionWeight,
+                    dayPortion: lv.dayPortion || 'full',
+                    leaveTypeId: lv.leaveTypeId,
+                });
             }
             cur.setDate(cur.getDate() + 1);
             guard++;
@@ -142,14 +182,25 @@ function buildLeaveMap(leaves, leaveTypesById, year, month) {
 // paid off-days; a day actually worked wins over a leave record.)
 function classifyMonth({ emp, year, month, asOfDate, attendanceByKey, festivalSet, leaveByKey, workDays }) {
     const totalDaysInMonth = new Date(year, month, 0).getDate();
-    const now = asOfDate ? new Date(asOfDate) : new Date();
+    // asOfDate is a calendar date read with local getters (callers pass
+    // istCalendarDate(...)). With no asOfDate, "today" is the IST calendar
+    // day: `new Date()` read with host getters is still YESTERDAY on a UTC
+    // server between 00:00 and 05:30 IST, which cut a day off the window.
+    const now = asOfDate ? new Date(asOfDate) : istCalendarDate(new Date());
     const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
     const isFuture = year > now.getFullYear() || (year === now.getFullYear() && month > now.getMonth() + 1);
     const windowEnd = isFuture ? 0 : (isCurrentMonth ? now.getDate() : totalDaysInMonth);
 
-    const joinDate = emp?.joiningDate ? new Date(emp.joiningDate) : null;
-    const joinsThisMonth = joinDate && joinDate.getFullYear() === year && joinDate.getMonth() + 1 === month;
-    const windowStart = joinsThisMonth ? joinDate.getDate() : 1;
+    // The pay window starts on the joining date. It is read as an IST
+    // calendar day (see parseLocalDate) so the start does not move with the
+    // host timezone, and a month that ends before the employee joined has an
+    // empty window rather than a full month of "absent" days.
+    const join = emp?.joiningDate ? parseLocalDate(new Date(emp.joiningDate)) : null;
+    const joinIndex = join ? join.getFullYear() * 12 + join.getMonth() + 1 : null;
+    const monthIndex = year * 12 + month;
+    let windowStart = 1;
+    if (joinIndex === monthIndex) windowStart = join.getDate();
+    else if (joinIndex !== null && joinIndex > monthIndex) windowStart = totalDaysInMonth + 1;
 
     const weeklyHolidays = emp?.weeklyHolidays || [];
     const days = [];
@@ -239,10 +290,38 @@ function computeTotals(days, config) {
         if (noWorkAtAll && (day.bucket === 'weeklyOff' || day.bucket === 'holiday')) continue;
 
         let w;
-        if (day.bucket === 'paidLeave' && day.leave && day.leave.payWeight != null) {
-            w = day.leave.payWeight; // per-leave-type override
+        if (day.bucket === 'paidLeave') {
+            // Per-leave-type override, else the bucket's own weight.
+            const full = day.leave && day.leave.payWeight != null
+                ? day.leave.payWeight
+                : (config.bucketWeights.paidLeave != null ? config.bucketWeights.paidLeave : 0);
+            // Nobody worked this day, so only the half that was taken is paid.
+            w = full * (day.leave && day.leave.portionWeight != null ? day.leave.portionWeight : 1);
         } else {
             w = config.bucketWeights[day.bucket] != null ? config.bucketWeights[day.bucket] : 0;
+
+            // HALF-DAY LEAVE ON A DAY THAT WAS ALSO WORKED.
+            //
+            // Bucketing ranks attendance above leave, and must keep doing so --
+            // the buckets describe what happened, and what happened is that the
+            // employee attended. But that made a half-day leave worthless: they
+            // came in for the morning, the day graded `halfDay` at 0.5, and the
+            // approved paid half was discarded. They lost half a day's pay AND
+            // half a day's balance for taking leave they were granted.
+            //
+            // A day still belongs to exactly ONE bucket, so the day-sum
+            // invariant is untouched; only the weight is topped up.
+            //
+            // Capped at 1: a full day of attendance plus a half day of leave
+            // cannot pay more than a day. That combination means the leave
+            // should not have been approved, and over-paying is not the way to
+            // report it.
+            if (day.isWorkingDay && day.leave && day.leave.isPaid
+                && day.leave.portionWeight != null && day.leave.portionWeight < 1) {
+                const leaveShare = (day.leave.payWeight != null ? day.leave.payWeight : 1)
+                    * day.leave.portionWeight;
+                w = Math.min(1, w + leaveShare);
+            }
         }
         payableDays += w;
         if (day.workedOnOff) holidayWorkedDays += 1;
@@ -258,9 +337,16 @@ function validateSalary({ counts, windowStart = 1, windowEnd, baseSalary, netSal
     const errors = [];
     const sum = BUCKETS.reduce((a, b) => a + (counts[b] || 0), 0);
     const expectedWindowDays = windowEnd >= windowStart ? (windowEnd - windowStart + 1) : 0;
-    if (sum !== expectedWindowDays) errors.push(`Day-sum invariant failed: ${sum} classified vs ${expectedWindowDays} days in window`);
-    if (!(baseSalary > 0)) errors.push('Base salary missing or non-positive');
-    if (netSalary < 0) errors.push('Net salary is negative');
+    // Worded for the admin who reads them on the salary slip, not for a
+    // developer: these end up in the record's remarks.
+    if (sum !== expectedWindowDays) errors.push(`Only ${sum} of ${expectedWindowDays} days could be counted (day-sum check failed)`);
+    if (!(baseSalary > 0)) errors.push('No monthly salary is set for this employee');
+    if (netSalary < 0) errors.push('Deductions are more than the pay earned, so net pay is below zero');
+    // A day the system could not grade must be resolved by a person before this
+    // salary is trusted. Paying around it in either direction is a guess.
+    if (counts.needsReview > 0) {
+        errors.push(`${counts.needsReview} attendance day(s) need checking before this salary can be paid`);
+    }
     return { ok: errors.length === 0, errors };
 }
 

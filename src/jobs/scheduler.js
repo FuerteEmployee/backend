@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { runSubscriptionLifecycle } = require('./subscription_lifecycle');
 const { runDeviceHealthCheck } = require('./device_health');
 const { closeForgottenPunches } = require('./attendance_close');
+const { runHealthCheck } = require('./health_check');
 
 let started = false;
 
@@ -40,9 +41,20 @@ function startScheduler() {
         );
     }, { timezone: process.env.TZ || 'Asia/Kolkata' });
 
+    // Hourly at :45, read-only: scans real data for the problems real phones
+    // found on staging (wrong auto punch-outs, silent trackers, duplicate days)
+    // and lists them on Super admin -> Health. The run at 07:45 IST also scans
+    // a day of location points for gaps and GPS jumps.
+    cron.schedule('45 * * * *', () => {
+        runHealthCheck().catch((err) =>
+            console.error('[scheduler] health check failed:', err.message),
+        );
+    }, { timezone: process.env.TZ || 'Asia/Kolkata' });
+
     console.log('[scheduler] subscription lifecycle scheduled (daily 02:00)');
     console.log('[scheduler] forgotten-punch close scheduled (daily 04:00 IST)');
     console.log('[scheduler] device health check scheduled (hourly at :15)');
+    console.log('[scheduler] health check scheduled (hourly at :45, deep scan 07:45 IST)');
 }
 
 module.exports = { startScheduler };

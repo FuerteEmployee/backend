@@ -1,9 +1,10 @@
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Settings = require('../models/Settings');
-const { istStartOfDay, istEndOfDay, istDateKey, shiftTimeOnDate } = require('../utils/attendance_helpers');
-const { computeWorkedMs, computeSessionWorkMs, gradeDay, openSessionIndex } = require('../utils/shift_status');
+const { istStartOfDay, istEndOfDay, istDateKey, istShiftOccurrence } = require('../utils/attendance_helpers');
+const { computeWorkedMs, computeSessionWorkMs, computeSessionGrossMs, gradeDay, openSessionIndex, shiftTimeOnDate, syncRootPunchOut, dropLateOnFlexible } = require('../utils/shift_status');
 const { logAttendanceEvent } = require('../utils/attendance_event_logger');
+const { excludeFrozen } = require('../utils/frozen_tenants');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Close sessions nobody ever punched out of.
@@ -30,11 +31,49 @@ const { logAttendanceEvent } = require('../utils/attendance_event_logger');
 /** Minutes of grace past shift end before a forgotten day is closed. */
 const CLOSE_GRACE_MIN = Number(process.env.CLOSE_GRACE_MINUTES) || 0;
 
-/** Resolve "HH:mm" (IST) against a given IST day, plus the configured grace. */
+/**
+ * How many days back to sweep. Never less than two.
+ *
+ * "Yesterday only" is correct for a job that never misses a night, and this
+ * one missed most of them: 488 days were left open because a run that does not
+ * happen leaves its day permanently unreachable -- the next run looks at the
+ * NEXT yesterday and the gap is gone forever. A lookback makes a missed night
+ * recoverable instead of fatal. Closing an already-closed day is a no-op, so
+ * widening this is safe.
+ *
+ * Two is the floor because of night shifts, not missed runs. A 22:00-06:00
+ * day is still being worked at 04:00, so the run that sweeps it skips it
+ * (below: "never close a shift that has not ended yet"). With a one-day window
+ * the NEXT run only looks at the day after, and that night was never closed.
+ */
+const CLOSE_LOOKBACK_DAYS = Math.max(2, Number(process.env.CLOSE_LOOKBACK_DAYS) || 2);
+
+/**
+ * Resolve "HH:mm" against a given day, plus the grace period.
+ *
+ * Delegates to shiftTimeOnDate rather than doing its own arithmetic. It used
+ * to call `d.setHours(...)`, which resolves in the HOST timezone -- and
+ * production runs on a UTC box, so a shift ending "20:00" was written as
+ * 20:00 UTC, i.e. 01:30 IST the next morning. That is the exact instant nine
+ * real days were closed at, each then computing zero worked time and grading
+ * absent. One resolver, defined once, in IST.
+ */
 function shiftEndOn(date, hhmm) {
-    const base = shiftTimeOnDate(hhmm, date);
-    if (!base) return null;
-    return new Date(base.getTime() + CLOSE_GRACE_MIN * 60 * 1000);
+    const ms = shiftTimeOnDate(hhmm, date);
+    if (ms === null) return null;
+    return new Date(ms + CLOSE_GRACE_MIN * 60 * 1000);
+}
+
+/**
+ * Close time for a shift OCCURRENCE, so an overnight shift ends on the right
+ * day. A 22:00-06:00 session closed with shiftEndOn alone resolved 06:00 on the
+ * SAME day as the 22:00 punch-in — before the session opened — and the
+ * never-close-before-open guard then collapsed it to a zero-length session.
+ */
+function occurrenceEnd(shift, refDate) {
+    const occ = istShiftOccurrence(shift, refDate);
+    if (!occ) return null;
+    return new Date(occ.end.getTime() + CLOSE_GRACE_MIN * 60 * 1000);
 }
 
 /**
@@ -43,20 +82,37 @@ function shiftEndOn(date, hhmm) {
  * @param {Object} [opts]
  * @param {Date}   [opts.now]     Evaluation instant (tests pass a fixed one).
  * @param {boolean}[opts.dryRun]  Report what would close, change nothing.
+ * @param {Array}  [opts.employeeIds] Only these employees (the QA full-day
+ *                 suite closes its own test day without touching anyone else's).
+ *                 Omitted = everyone, which is what the scheduler does.
  */
-async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) {
-    // Yesterday, in IST. Anything still open from today is someone at work.
+async function closeForgottenPunches({ now = new Date(), dryRun = false, employeeIds = null } = {}) {
+    // Yesterday, in IST. Anything still open from TODAY is someone at work,
+    // so the window always ends there. It begins CLOSE_LOOKBACK_DAYS earlier so
+    // a night the job did not run is picked up on the next one.
     const yesterday = new Date(istStartOfDay(now).getTime() - 1);
-    const dayStart = istStartOfDay(yesterday);
     const dayEnd = istEndOfDay(yesterday);
+    const dayStart = istStartOfDay(
+        new Date(yesterday.getTime() - (CLOSE_LOOKBACK_DAYS - 1) * 24 * 60 * 60 * 1000),
+    );
 
     const open = await Attendance.find({
         date: { $gte: dayStart, $lte: dayEnd },
         punchIn: { $ne: null },
         $or: [{ punchOut: null }, { 'shifts.punchOut': null }],
+        ...excludeFrozen(), // companies kept on the previous release close their days there
+        ...(Array.isArray(employeeIds) && employeeIds.length ? { employeeId: { $in: employeeIds } } : {}),
     });
 
-    const result = { examined: open.length, closed: 0, skipped: 0, dayKey: istDateKey(yesterday), details: [] };
+    const result = {
+        examined: open.length,
+        closed: 0,
+        skipped: 0,
+        needsReview: 0,
+        from: istDateKey(dayStart),
+        to: istDateKey(yesterday),
+        details: [],
+    };
 
     for (const attendance of open) {
         const idx = openSessionIndex(attendance);
@@ -79,7 +135,17 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) 
             if (s.punchIn && (!latestIn || new Date(s.punchIn) > latestIn)) latestIn = new Date(s.punchIn);
         }
 
-        const shiftEnd = shiftEndOn(yesterday, user.shiftId?.endTime) || shiftEndOn(yesterday, '18:00');
+        // The row's own date, not `yesterday`: with a lookback the batch spans
+        // several days, and resolving every one of them against yesterday's
+        // date would close a Tuesday session at Thursday's shift end.
+        const onDay = attendance.date || yesterday;
+        // Anchor on the punch itself where we have one: for an overnight shift
+        // the occurrence may have started the previous IST day, and the row's
+        // date alone cannot distinguish that.
+        const anchor = latestIn || onDay;
+        const shiftEnd = occurrenceEnd(user.shiftId, anchor)
+            || shiftEndOn(onDay, user.shiftId?.endTime)
+            || shiftEndOn(onDay, '18:00');
 
         let closeAt = shiftEnd;
         if (!closeAt || (latestIn && closeAt < latestIn)) {
@@ -89,6 +155,15 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) 
             closeAt = latestIn;
         }
         if (!closeAt) { result.skipped++; continue; }
+
+        // Never close a shift that has not ended yet.
+        //
+        // This job runs at 04:00 IST and sweeps YESTERDAY, which is safe for a
+        // day shift but not for a night one: a 22:00-06:00 session opened
+        // yesterday is still being worked at 04:00, and closing it would stamp
+        // a punch-out two hours in the future on somebody who is at their post.
+        // Leave it; the next run, after 06:00 has passed, will close it properly.
+        if (closeAt.getTime() > new Date(now).getTime()) { result.skipped++; continue; }
 
         if (dryRun) {
             result.details.push({
@@ -105,19 +180,44 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) 
             session.closeReason = 'shift_end';
             session.punchOutSource = 'system';
         }
-        if (idx === 0 || !sessions.length) {
+        // The root mirrors the day's FINAL punch-out, whichever session that
+        // is. Keying on index 0 left the root null whenever a later session was
+        // the one being closed -- and this job's own open-row query above
+        // matches on a null root, so those rows came back every single night.
+        if (!sessions.length) {
             attendance.punchOut = closeAt;
+        } else {
+            syncRootPunchOut(attendance);
         }
         attendance.punchOutIsProvisional = false;
 
         attendance.totalWorkMs = computeWorkedMs(attendance, user.shiftId, settings);
-        for (const s of sessions) s.workMs = computeSessionWorkMs(s, attendance, user.shiftId);
+        for (const s of sessions) {
+            s.workMs = computeSessionWorkMs(s, attendance, user.shiftId);
+            s.grossMs = computeSessionGrossMs(s);
+        }
 
         // Grade it now that it is closed. Only ever downgrades, same as the
         // manual and geofence paths.
+        //
+        // A half-day verdict outranks 'late', as it does on the device path
+        // (punch_reconcile). Payroll pays 'late' as a full day, so a late
+        // arrival who forgot to punch out kept full pay on short hours. The
+        // lateness itself survives in wasLate, the flag payroll reads.
         const grade = gradeDay(attendance, user.shiftId, settings);
-        if (grade === 'half-day' && attendance.status === 'present') attendance.status = 'half-day';
+        dropLateOnFlexible(attendance, user.shiftId); // nobody is Late on a flexible shift
+        if (attendance.status === 'late') attendance.wasLate = true;
+        if (grade === 'half-day' && (attendance.status === 'present' || attendance.status === 'late')) attendance.status = 'half-day';
         if (grade === 'absent') attendance.status = 'absent';
+
+        // A day this job closed that still measures as nothing is OUR failure
+        // to reconstruct, not the employee's absence -- they have a punch-in on
+        // record. Flag it for a person rather than deducting a day's pay on the
+        // strength of a number we could not compute.
+        if (grade === 'needs_review') {
+            attendance.status = 'needs_review';
+            result.needsReview++;
+        }
 
         const note = ' | Auto-closed at shift end (no punch-out recorded)';
         if (!String(attendance.remarks || '').includes(note.trim())) {
@@ -141,7 +241,7 @@ async function closeForgottenPunches({ now = new Date(), dryRun = false } = {}) 
     }
 
     console.log(
-        `[attendance-close] ${result.dayKey}: examined ${result.examined}, ` +
+        `[attendance-close] ${result.from}..${result.to}: examined ${result.examined}, ` +
         `closed ${result.closed}, skipped ${result.skipped}${dryRun ? ' (DRY RUN)' : ''}`,
     );
     return result;

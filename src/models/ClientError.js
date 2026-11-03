@@ -25,7 +25,12 @@ const ClientErrorSchema = new mongoose.Schema({
     message: { type: String, required: true, maxlength: 2000 },
     // 'ui' = a toast/error screen the employee saw, 'network' = a failed API
     // call, 'unhandled' = window.onerror / unhandledrejection.
-    kind: { type: String, enum: ['ui', 'network', 'unhandled'], default: 'unhandled' },
+    // 'tracker' is the background location service failing to start. It is
+    // its own kind because it is the one failure the employee cannot see and
+    // cannot report -- the app looks fine, they are punched in, and nothing is
+    // being recorded. Lumping it under 'unhandled' is how an employee lost a
+    // whole afternoon of location history with no trace but a gap.
+    kind: { type: String, enum: ['ui', 'network', 'unhandled', 'tracker'], default: 'unhandled' },
     stack: { type: String, default: null, maxlength: 8000 },
     // Route the employee was on, plus the API call if this was a network error.
     route: { type: String, default: null },

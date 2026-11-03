@@ -1,6 +1,8 @@
 const Subscription = require('../models/Subscription');
 const User = require('../models/User');
 const { sendSubscriptionReminder } = require('./notify');
+// Companies kept on the previous release (FROZEN_TENANT_IDS) are run by that release's jobs.
+const { excludeFrozen } = require('../utils/frozen_tenants');
 
 // Days a tenant keeps access after a paid period ends before being hard-expired.
 const GRACE_DAYS = parseInt(process.env.SUBSCRIPTION_GRACE_DAYS || '3', 10);
@@ -34,6 +36,7 @@ async function runSubscriptionLifecycle(now = new Date()) {
         const expiredTrials = await Subscription.find({
             status: 'trial',
             trialEndDate: { $lt: now },
+            ...excludeFrozen(),
         });
         for (const sub of expiredTrials) {
             sub.status = 'expired';
@@ -52,6 +55,7 @@ async function runSubscriptionLifecycle(now = new Date()) {
         const lapsed = await Subscription.find({
             status: 'active',
             currentPeriodEnd: { $lt: now },
+            ...excludeFrozen(),
         });
         for (const sub of lapsed) {
             sub.status = 'grace';
@@ -70,6 +74,7 @@ async function runSubscriptionLifecycle(now = new Date()) {
         const graceExpired = await Subscription.find({
             status: 'grace',
             graceEndDate: { $lt: now },
+            ...excludeFrozen(),
         });
         for (const sub of graceExpired) {
             sub.status = 'expired';
@@ -85,7 +90,7 @@ async function runSubscriptionLifecycle(now = new Date()) {
 
     // 3.5 Send deadline reminders at the configured milestones (once each).
     try {
-        const upcoming = await Subscription.find({ status: { $in: ['trial', 'active', 'grace'] } });
+        const upcoming = await Subscription.find({ status: { $in: ['trial', 'active', 'grace'] }, ...excludeFrozen() });
         for (const sub of upcoming) {
             const deadline =
                 sub.status === 'trial' ? sub.trialEndDate
@@ -131,7 +136,7 @@ async function runSubscriptionLifecycle(now = new Date()) {
     // 4. Reconcile employeesUsed against the actual employee count, so seat
     //    usage stays accurate even if a create/delete missed the in-line sync.
     try {
-        const subs = await Subscription.find({}, { adminId: 1, employeesUsed: 1 });
+        const subs = await Subscription.find({ ...excludeFrozen() }, { adminId: 1, employeesUsed: 1 });
         for (const sub of subs) {
             const count = await User.countDocuments({ adminId: sub.adminId, role: 'employee' });
             if (sub.employeesUsed !== count) {

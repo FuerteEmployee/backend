@@ -24,6 +24,10 @@
     {
       "path": "/api/cron/close-punches",
       "schedule": "30 22 * * *"
+    },
+    {
+      "path": "/api/cron/health-check",
+      "schedule": "45 * * * *"
     }
   ]
 }

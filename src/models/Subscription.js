@@ -42,6 +42,20 @@ const SubscriptionSchema = new mongoose.Schema({
     // so reminders fire at most once each. Reset when a new period begins.
     remindersSent: { type: [Number], default: [] },
 
+    // Per-tenant feature toggles. The super admin enables/disables specific
+    // features for each tenant from the Customers page; a false entry hides
+    // the page from the admin panel and 403s its API (checkFeatureToggle).
+    //
+    // Holds ONLY the super admin's explicit choices. There is deliberately no
+    // schema default: a Map default is written into the document the next
+    // time it is saved for any reason (renewal, lifecycle job), freezing
+    // today's defaults into every tenant. An absent key resolves through
+    // FEATURE_TOGGLE_DEFAULTS in utils/feature_toggles.js at read time.
+    featureToggles: {
+        type: Map,
+        of: Boolean,
+    },
+
     // History of plan changes
     history: [{
         action: {

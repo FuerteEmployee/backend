@@ -100,6 +100,20 @@ const DeviceSchema = new mongoose.Schema({
     // every punch starts being corrected twice with nothing to show why.
     clockOffsetMinutes: { type: Number, default: 0 },
 
+    // How far this terminal's clock is from OURS, learned from its own taps
+    // (utils/device_clock.js observeServerOffset). Every tap is stored at
+    // terminal time + serverOffsetMs, i.e. on the server's clock, whatever the
+    // terminal's clock says. Learned, not set: it follows the clock if somebody
+    // changes it. `serverOffsetCandidate` is a larger offset that later taps are
+    // still confirming (a clock that fell further behind).
+    serverOffsetMs: { type: Number, default: null },
+    serverOffsetConfirmedAt: { type: Date, default: null },
+    serverOffsetCandidate: {
+        ms: { type: Number },
+        firstAt: { type: Date },
+        count: { type: Number },
+    },
+
     notes: { type: String, default: '' },
 }, { timestamps: true });
 

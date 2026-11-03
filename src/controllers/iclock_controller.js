@@ -1,68 +1,27 @@
 const User = require('../models/User');
-const Attendance = require('../models/Attendance');
 const Settings = require('../models/Settings');
-const { punchIn, punchOut, lunchIn, lunchOut } = require('./attendance_controller');
 const {
     resolveDevice,
     markSeen,
     markPunch,
     recordUnresolved,
     isDuplicateLog,
+    forgetLog,
 } = require('../utils/device_registry');
-const PunchLog = require('../models/PunchLog');
 const punchSequence = require('../utils/punch_sequence');
-const punchReconcile = require('../utils/punch_reconcile');
-const { istStartOfDay, istDateKey, parseDeviceTimestamp } = require('../utils/attendance_helpers');
+const { recordTap } = require('../utils/tap_ingest');
+const { parseDeviceTimestamp } = require('../utils/attendance_helpers');
+const { withEmployeeLock } = require('../utils/employee_lock');
 const Device = require('../models/Device');
-const { recordClockSkew } = require('../utils/device_clock');
+const { recordClockSkew, observeServerOffset, toServerTime } = require('../utils/device_clock');
+const { isFrozenTenant } = require('../utils/frozen_tenants');
 const { sendDeviceClockAlert } = require('../jobs/notify');
-
-// Maps a resolved action name to the handler that records it.
-const HANDLERS = {
-    'punch-in': punchIn,
-    'punch-out': punchOut,
-    'lunch-in': lunchIn,
-    'lunch-out': lunchOut,
-};
 
 // A device has no concept of tenants — it only ever sends its own serial number
 // and a raw PIN. Which company a push belongs to is decided entirely by the
 // Device registry (see utils/device_registry.js), which the super admin manages
 // from the Machines screen. Serial numbers are unique platform-wide, so a given
 // machine can only ever resolve to one tenant.
-
-// Decides what a pushed punch event MEANS. The device's own Status field (0/1)
-// is unreliable across configs, so we never trust it.
-//
-// Two modes:
-//  • Sequence configured (Settings.attendance.punchSequence.enabled) — the tap
-//    becomes the first step of the tenant's sequence that hasn't happened yet,
-//    so four taps can mean in / leave for lunch / back / out.
-//  • Otherwise, the legacy toggle: no open record → punch in, open → punch out.
-//
-// Returns { action, reason }. A null action means "don't record this tap".
-async function resolveAction(adminId, employeeId, seqConfig) {
-    const today = istStartOfDay();
-    const existing = await Attendance.findOne({ adminId, employeeId, date: today })
-        .select('punchIn punchOut lunchInTime lunchOutTime');
-
-    const legacyToggle = () =>
-        (!existing || existing.punchOut) ? 'punch-in' : 'punch-out';
-
-    if (!seqConfig || !seqConfig.enabled) {
-        return { action: legacyToggle(), reason: 'toggle' };
-    }
-
-    const next = punchSequence.nextAction(existing, seqConfig);
-    if (next) return { action: next, reason: 'sequence' };
-
-    // Every configured step is done for today.
-    if (seqConfig.afterLast === 'toggle') {
-        // Second shift: re-open the day the legacy way.
-        return { action: legacyToggle(), reason: 'sequence-complete-toggle' };
-    }
-    return { action: null, reason: 'sequence_complete' };
-}
 
 /**
  * Fold this tap into the terminal's clock-health samples, and alert once a
@@ -111,88 +70,76 @@ async function checkDeviceClock(device, tapTime) {
  *  - unparseable device clock — falls back to receive time, which is the old
  *    behaviour and still better than discarding the punch entirely.
  */
-async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings, device }) {
-    // A terminal configured to the wrong timezone reports a perfectly
-    // plausible timestamp that is a whole offset out. `clockOffsetMinutes` is
-    // the stored, deliberate correction for such a device; it stays 0 unless
-    // somebody has set it.
-    const parsed = parseDeviceTimestamp(rawDeviceTime, new Date(), device?.clockOffsetMinutes || 0);
-    const tapTime = parsed || new Date();
-    const dayKey = istDateKey(tapTime);
-    const employeeId = employee._id;
+/**
+ * When this tap happened, on the SERVER's clock -- never the terminal's.
+ *
+ * The terminal's timestamp is converted with its learned offset (see
+ * utils/device_clock.js): a tap that arrives at once lands at its arrival time,
+ * and one the terminal held back while the network was down lands at the
+ * server time it was actually made (tapped 10:45, delivered 11:12 -> 10:45).
+ * pushData must have folded the batch into the offset first (learnBatchOffset).
+ *
+ * Used by both paths -- day reconciliation and the punch sequence -- so the two
+ * cannot disagree about when a tap happened.
+ */
+function resolveTapTime({ sn, pin, rawDeviceTime, device }) {
+    const now = new Date();
+    const rawParsed = parseDeviceTimestamp(rawDeviceTime, now, 0);
 
-    if (!parsed) {
+    if (!rawParsed) {
         console.warn(
             `[iclock] SN=${sn} PIN=${pin} sent an unusable timestamp ("${rawDeviceTime}") — ` +
-            'falling back to receive time; check the terminal\'s clock.'
+            'using the time it arrived.'
         );
-    } else if (device) {
-        checkDeviceClock(device, tapTime).catch((err) =>
+        return now;
+    }
+
+    const tapTime = device ? toServerTime(device, rawParsed) : rawParsed;
+    if (device) {
+        // Logged when it moves a tap by more than a minute: a punch time that
+        // does not match what the terminal displayed must be explainable from
+        // the logs, or nobody can tell a conversion from a bug.
+        if (Math.abs(tapTime - rawParsed) > 60 * 1000) {
+            console.log(
+                `[iclock] SN=${sn} PIN=${pin} terminal time ${rawDeviceTime} -> server time ${tapTime.toISOString()}`
+            );
+        }
+        checkDeviceClock(device, rawParsed).catch((err) =>
             console.error('[iclock] clock check failed:', err.message));
     }
-
-    const gap = punchReconcile.debounceMs(settings);
-    if (gap > 0) {
-        const last = await PunchLog.findOne({ adminId, employeeId, dayKey, discarded: { $ne: true } })
-            .sort({ deviceTime: -1 })
-            .select('deviceTime')
-            .lean();
-
-        // Absolute difference, not just "newer than", so a backlog line that
-        // lands next to an already-recorded tap is caught too.
-        if (last && Math.abs(tapTime - new Date(last.deviceTime)) < gap) {
-            await PunchLog.create({
-                adminId, employeeId, dayKey, deviceTime: tapTime,
-                serialNumber: sn, pin: String(pin), source: 'biometric',
-                discarded: true, discardReason: 'debounced',
-            }).catch((err) => {
-                if (err.code !== 11000) throw err;
-            });
-            return { recorded: false, reason: 'debounced', tapTime, dayKey };
-        }
-    }
-
-    try {
-        await PunchLog.create({
-            adminId, employeeId, dayKey, deviceTime: tapTime,
-            serialNumber: sn, pin: String(pin), source: 'biometric',
-        });
-    } catch (err) {
-        if (err.code === 11000) return { recorded: false, reason: 'duplicate', tapTime, dayKey };
-        throw err;
-    }
-
-    const attendance = await punchReconcile.reconcileDay({
-        Attendance, PunchLog, User, Settings, adminId, employeeId, dayKey,
-    });
-
-    return {
-        recorded: true,
-        tapTime,
-        dayKey,
-        tapCount: attendance ? await PunchLog.countDocuments({ adminId, employeeId, dayKey, discarded: { $ne: true } }) : 0,
-    };
+    return tapTime;
 }
 
-function callHandler(handler, adminId, employeeId) {
-    // `deviceSource` distinguishes this channel from the BOTLens camera, which
-    // also punches with isDevicePunch. Both used to land as 'lens', so the
-    // admin table showed the camera icon for fingerprint-terminal punches and
-    // the Attendance model's 'biometric' enum value was never actually written.
-    const req = {
-        adminId: String(adminId),
-        userId: String(employeeId),
-        body: {},
-        isDevicePunch: true,
-        deviceSource: 'biometric',
-    };
-    return new Promise(resolve => {
-        let statusCode = 200;
-        const fakeRes = {
-            status(code) { statusCode = code; return fakeRes; },
-            json(body) { resolve({ ok: statusCode < 400, statusCode, body }); },
-        };
-        handler(req, fakeRes);
+/**
+ * Fold a whole ATTLOG batch into the terminal's clock offset BEFORE any of it
+ * is converted, newest tap first. An offline backlog usually ends with a tap
+ * made after the network returned; that one anchors the older lines. Fed
+ * oldest-first, the oldest line would set the offset and be stored late.
+ */
+function learnBatchOffset(device, lines) {
+    if (!device) return;
+    const now = new Date();
+    const taps = lines
+        .map((line) => parseDeviceTimestamp(line.split('\t')[1], now, 0))
+        .filter(Boolean)
+        .sort((a, b) => b - a);
+    let changed = false;
+    for (const t of taps) changed = observeServerOffset(device, t, now) || changed;
+    if (!changed) return;
+    Device.updateOne({ _id: device._id }, {
+        $set: {
+            serverOffsetMs: device.serverOffsetMs,
+            serverOffsetConfirmedAt: device.serverOffsetConfirmedAt,
+            serverOffsetCandidate: device.serverOffsetCandidate || null,
+        },
+    }).catch((err) => console.error('[iclock] could not save clock offset:', err.message));
+}
+
+async function recordTapAndReconcile({ adminId, employee, sn, pin, rawDeviceTime, settings, device }) {
+    const tapTime = resolveTapTime({ sn, pin, rawDeviceTime, device });
+    return recordTap({
+        adminId, employeeId: employee._id, tapTime,
+        source: 'biometric', serialNumber: sn, pin: String(pin), settings,
     });
 }
 
@@ -207,6 +154,16 @@ exports.handshake = (req, res) => {
     // straight away, before anybody has punched on it.
     resolveDevice(sn).catch(err => console.error('[iclock] handshake device resolve failed:', err.message));
 
+    // TimeZone is how a terminal that syncs to us turns our HTTP `Date` header
+    // (GMT) into its own clock. Per the PUSH protocol -12..12 is hours and a
+    // value beyond ±60 is minutes, so India would be 330.
+    //
+    // Deliberately left at 0. A client may keep a terminal on UTC (a 5h30m gap
+    // on its display) and does not want us resetting it. Its punches are put
+    // on the SERVER's clock on our side instead: resolveTapTime converts every
+    // tap with the terminal's learned offset (utils/device_clock.js), whatever
+    // its clock says. Only a manual "Clock correction" (Super admin > Machines)
+    // would double-count if the terminal's clock were changed under it.
     res.type('text/plain').send(
         `GET OPTION FROM: ${sn}\r\n` +
         `Stamp=9999\r\n` +
@@ -266,6 +223,13 @@ exports.pushData = async (req, res) => {
 
     const adminId = device.adminId;
 
+    // A company kept on the previous release records its taps there. Not
+    // acknowledged (500), so the machine keeps the batch instead of losing it.
+    if (isFrozenTenant(adminId)) {
+        console.warn(`[iclock] SN=${sn} belongs to a frozen company; not recording ${lines.length} punch(es) here`);
+        return res.status(500).type('text/plain').send('ERROR');
+    }
+
     // One Settings read per push batch, not per line.
     const settings = await Settings.findOne({ adminId }).select('attendance');
     const seqConfig = punchSequence.resolveConfig(settings);
@@ -278,6 +242,10 @@ exports.pushData = async (req, res) => {
 
     let processed = 0;
     let failed = 0;
+
+    // Before converting any line, learn this terminal's clock offset from the
+    // whole batch -- see learnBatchOffset.
+    learnBatchOffset(device, lines);
 
     for (const line of lines) {
         const [pin, deviceTime] = line.split('\t');
@@ -319,53 +287,25 @@ exports.pushData = async (req, res) => {
 
             const employee = matches[0];
 
-            // Default path: store the raw tap and re-derive the whole day from
-            // every tap so far. Only a tenant that has explicitly configured a
-            // punch sequence falls through to the incremental logic below.
-            if (!seqConfig.enabled) {
-                const outcome = await recordTapAndReconcile({
-                    adminId, employee, sn, pin, rawDeviceTime: deviceTime, settings, device,
-                });
-                if (outcome.recorded) {
-                    processed++;
-                    markPunch(sn);
-                    console.log(
-                        `[iclock] ${employee.name} (PIN ${pin}) tap @ ${outcome.tapTime.toISOString()} ` +
-                        `→ day ${outcome.dayKey} re-derived from ${outcome.tapCount} tap(s)`
-                    );
-                } else {
-                    console.log(`[iclock] ${employee.name} (PIN ${pin}) tap ignored [${outcome.reason}]`);
-                }
-                continue;
-            }
-
-            const { action, reason } = await resolveAction(adminId, employee._id, seqConfig);
-
-            // Sequence finished for today and the tenant chose to ignore extras.
-            // Discarding beats guessing: without this an accidental second tap
-            // after punch-out would reopen the day and corrupt the hours.
-            if (!action) {
-                console.log(
-                    `[iclock] ${employee.name} (PIN ${pin}) has completed today's punch sequence — extra tap ignored`
-                );
-                recordUnresolved(sn, { pin, reason: 'sequence_complete', deviceTime });
-                continue;
-            }
-
-            const handler = HANDLERS[action];
-            if (!handler) {
-                console.error(`[iclock] no handler for action "${action}" — skipping PIN ${pin}`);
-                continue;
-            }
-
-            const result = await callHandler(handler, adminId, employee._id);
-
-            if (result.ok) {
+            // Store the raw tap and rebuild the whole day from every tap plus
+            // what the app already wrote. A company's own tap order
+            // (punchSequence) is applied inside that rebuild, in tap-time order:
+            // deciding a tap's meaning on ARRIVAL turned a tap held by an
+            // offline machine into a new punch-in inside a later session.
+            // One person's taps one at a time: the debounce check, the tap store
+            // and the day rebuild read then write.
+            const outcome = await withEmployeeLock(`punch:${employee._id}`, () => recordTapAndReconcile({
+                adminId, employee, sn, pin, rawDeviceTime: deviceTime, settings, device,
+            }));
+            if (outcome.recorded) {
                 processed++;
                 markPunch(sn);
-                console.log(`[iclock] ${employee.name} (PIN ${pin}) → ${action} [${reason}]`);
+                console.log(
+                    `[iclock] ${employee.name} (PIN ${pin}) tap @ ${outcome.tapTime.toISOString()} ` +
+                    `→ day ${outcome.dayKey} rebuilt from ${outcome.tapCount} tap(s)${seqConfig.enabled ? ' [sequence]' : ''}`
+                );
             } else {
-                console.warn(`[iclock] ${action} rejected for deviceUserId=${pin}: ${result.body?.message}`);
+                console.log(`[iclock] ${employee.name} (PIN ${pin}) tap ignored [${outcome.reason}]`);
             }
         } catch (err) {
             // An unexpected failure — the database was unreachable, a write
@@ -374,6 +314,9 @@ exports.pushData = async (req, res) => {
             // final and must be acknowledged, or the device would retry them
             // forever. This one should be retried.
             failed++;
+            // Un-mark it, or the re-push this 500 asks for would be skipped
+            // as a duplicate resend and the line lost after all.
+            forgetLog(sn, pin, deviceTime);
             console.error(`[iclock] failed to process line "${line}":`, err.message);
         }
     }

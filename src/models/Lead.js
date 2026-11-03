@@ -15,6 +15,9 @@ const LeadSchema = new mongoose.Schema({
     value: { type: Number, default: 0 },
     followUpDate: { type: String },
     assignedTo: { type: String, default: 'Unassigned' },
+    // The employee behind assignedTo. Set by lead_controller from a real
+    // employee of the company; older leads carry only the name.
+    assignedToId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     notes: { type: String },
     salesCalls: { type: Number, default: 0 },
     botStatus: {
@@ -25,9 +28,17 @@ const LeadSchema = new mongoose.Schema({
     address: { type: String },
     businessType: { type: String },
     requirement: { type: String },
-    imageUrls: [{ type: String }] // Cloudinary URLs of uploaded lead images
+    imageUrls: [{ type: String }], // Cloudinary URLs of uploaded lead images
+    // The employee who submitted it from the app, so their own GET is scoped
+    // to what they brought in. Unset for leads the admin panel creates, and
+    // for every lead recorded before this field existed.
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    // Last ten digits of phone, for the duplicate check in lead_controller.
+    // Absent on leads saved before it existed; those are compared by phone.
+    phoneKey: { type: String }
 }, { timestamps: true, strict: false });
 
 LeadSchema.index({ adminId: 1, status: 1 });
+LeadSchema.index({ adminId: 1, phoneKey: 1 });
 
 module.exports = mongoose.model('Lead', LeadSchema);

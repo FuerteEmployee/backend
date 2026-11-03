@@ -1,11 +1,14 @@
 const express = require('express');
 const router  = express.Router();
 const { getAll, create, getById, update, remove } = require('../controllers/recruitment_controller');
-const { protect, checkPermission } = require('../middleware/auth.middleware');
+const { protect, panelOnly, checkPermission } = require('../middleware/auth.middleware');
 const { checkModuleAccess }        = require('../middleware/subscription.middleware');
 
 // All routes require a valid session + module plan access
 router.use(protect);
+// panelOnly: checkPermission restricts sub-admins only and lets employees
+// straight through, so without it an employee's token could do all of this.
+router.use(panelOnly);
 router.use(checkModuleAccess('recruitment'));
 
 router.get('/', getAll);

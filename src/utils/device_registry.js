@@ -14,6 +14,22 @@ function normalizeSerial(sn) {
     return String(sn || '').trim().toUpperCase();
 }
 
+/**
+ * Could this be a real terminal serial?
+ *
+ * /iclock/* is unauthenticated by design (the device can only send its serial),
+ * so anybody on the internet can call it. Without a shape check, any string --
+ * up to the 5 MB body limit, in a query parameter -- was written into the
+ * Device collection as a new "unassigned machine" for the super admin to wade
+ * through. Real eSSL/ZKTeco serials are short runs of letters and digits.
+ * Only applied before AUTO-REGISTERING: an existing row is always looked up,
+ * whatever its serial looks like.
+ */
+function isUsableSerial(sn) {
+    const v = normalizeSerial(sn);
+    return v.length >= 3 && v.length <= 40 && /^[A-Z0-9][A-Z0-9._-]*$/.test(v) && v !== 'UNKNOWN';
+}
+
 // De-dupes a resent ATTLOG line. iClock-protocol terminals routinely re-push
 // their buffered log on reconnect/ack-timeout — without this, the same tap
 // gets treated as a brand-new punch and advances the in/out toggle (or
@@ -44,6 +60,19 @@ function isDuplicateLog(serialNumber, pin, deviceTime) {
         }
     }
     return false;
+}
+
+/**
+ * Undo isDuplicateLog's mark for a line that FAILED to store.
+ *
+ * isDuplicateLog records a line as seen before it is processed. When the
+ * write then throws, pushData answers 500 so the terminal keeps the batch and
+ * re-pushes it -- and without this the re-push, arriving within the 10-minute
+ * window, was skipped here as a "duplicate resend" and acknowledged. The one
+ * line the retry existed for was lost.
+ */
+function forgetLog(serialNumber, pin, deviceTime) {
+    processedLogs.delete(processedLogKey(serialNumber, pin, deviceTime));
 }
 
 function invalidateDeviceCache(serialNumber) {
@@ -120,6 +149,10 @@ async function resolveDevice(rawSerial, { touch = true } = {}) {
     }
 
     if (!device) {
+        if (!isUsableSerial(serialNumber)) {
+            console.warn(`[devices] ignored contact with an implausible serial (${serialNumber.length} chars)`);
+            return null;
+        }
         // First contact from a machine nobody has registered. Upsert rather
         // than create so two simultaneous pushes can't race into a duplicate
         // key error on the unique serial index.
@@ -188,4 +221,6 @@ module.exports = {
     markPunch,
     recordUnresolved,
     isDuplicateLog,
+    forgetLog,
+    isUsableSerial,
 };

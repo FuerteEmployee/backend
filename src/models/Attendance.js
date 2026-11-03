@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { istDateKey } = require('../utils/attendance_helpers');
 
 const AttendanceSchema = new mongoose.Schema({
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -25,9 +26,18 @@ const AttendanceSchema = new mongoose.Schema({
     punchOutDistance: { type: Number, default: null },
     lunchInDistance: { type: Number, default: null },
     lunchOutDistance: { type: Number, default: null },
+    // Canonical IST day, "YYYY-MM-DD". Set automatically on save; see the
+    // pre-save hook and the unique index note at the bottom of this file.
+    dayKey: { type: String, default: null },
+
     status: {
         type: String,
-        enum: ['present', 'absent', 'half-day', 'late', 'wfh'],
+        // 'needs_review' is not a grade -- it is the absence of one. A closed
+        // day that computes to zero worked time while carrying a real punch-in
+        // cannot honestly be called present, half-day OR absent, and calling it
+        // absent silently costs the employee a day. It means: this needs a
+        // human, and it must not be paid from until one has looked.
+        enum: ['present', 'absent', 'half-day', 'late', 'wfh', 'needs_review'],
         default: 'absent',
     },
     // Which channel recorded this day's attendance — the CRM shows a
@@ -52,9 +62,14 @@ const AttendanceSchema = new mongoose.Schema({
         // engine. Without it a job-closed day is indistinguishable from a real
         // punch-out, which is how the reference ended up with 97% of records
         // carrying no reason and no way to audit them after the fact.
+        // `regularized` is deliberately distinct from `admin`: both end with an
+        // admin writing the time, but one of them started with the employee
+        // saying what actually happened and is backed by an approved
+        // Regularization carrying the original value. "Corrected on request"
+        // and "overwritten by the office" are not the same audit answer.
         closeReason: {
             type: String,
-            enum: [null, 'manual', 'auto_geofence', 'shift_end', 'admin', 'device'],
+            enum: [null, 'manual', 'auto_geofence', 'shift_end', 'admin', 'device', 'regularized'],
             default: null,
         },
         // Where and how each END of the session happened, mirroring the root
@@ -77,12 +92,33 @@ const AttendanceSchema = new mongoose.Schema({
         punchOutAccuracy: { type: Number, default: null },
         punchInDistance: { type: Number, default: null },
         punchOutDistance: { type: Number, default: null },
+        // When the server received a machine tap that arrived late: the
+        // terminal was offline, kept the tap, and sent it once the network
+        // came back. Set only when it arrived well after it was tapped
+        // (utils/late_arrival.js), so a value here means "recorded offline".
+        // Shown next to the punch, because a tap that arrives after the day
+        // has moved on can land as an odd session, and the reason must be visible.
+        punchInReceivedAt: { type: Date, default: null },
+        punchOutReceivedAt: { type: Date, default: null },
+        // The PunchLog tap that made this end, when a machine or face tap did.
+        // The day rebuild (utils/punch_reconcile.js) re-reads such an end from
+        // its tap every time; an end WITHOUT one was written by the app, an
+        // admin or a job, and the rebuild keeps it exactly as it is.
+        punchInTapId: { type: mongoose.Schema.Types.ObjectId, default: null },
+        punchOutTapId: { type: mongoose.Schema.Types.ObjectId, default: null },
         // Net worked ms for THIS session, clamped to the shift window by
         // computeWorkedMs(). Stored per session so the UI can show a per-row
         // duration without re-deriving the shift clamp in the browser -- the
         // reference showed raw out-minus-in there, which disagreed with the
         // day total whenever a session ran outside the shift.
         workMs: { type: Number, default: null },
+        // Raw out-minus-in for THIS session, with NO shift clamp. Never used
+        // for pay -- `workMs` above is the credited figure. It exists so the
+        // two can be shown side by side, because a session lying entirely
+        // outside the shift window clamps to zero and the time it represents
+        // otherwise leaves no trace in the record at all. The gap between the
+        // two is precisely what a `needs_review` day is asking a human about.
+        grossMs: { type: Number, default: null },
     }],
     // True when the current `punchOut` was set by a device (Lens/biometric)
     // tap, not an explicit app punch-out. Devices only ever send a generic
@@ -133,11 +169,114 @@ const AttendanceSchema = new mongoose.Schema({
         default: null,
     },
 
+    // Every approved correction of a punch on this day, oldest first. The pay
+    // maths reads only the punch fields above, which hold the CORRECTED time;
+    // this is the reference the owner asked to keep ("10 is kept as reference
+    // for the future as well") and is shown, never paid from. Written only by
+    // regularization_controller's approval, from the approved Regularization.
+    corrections: [{
+        _id: false,
+        field: { type: String, enum: ['punchIn', 'punchOut', 'lunchInTime', 'lunchOutTime'] },
+        from: { type: Date, default: null },
+        to: { type: Date, default: null },
+        regularizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Regularization', default: null },
+        approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+        // Denormalised so a day-detail read needs no populate, and still says
+        // who approved it after that sub-admin's account is removed.
+        approvedByName: { type: String, default: null },
+        approvedAt: { type: Date, default: null },
+    }],
+
     remarks: { type: String, default: null }
 }, { timestamps: true });
 
+/**
+ * The canonical IST calendar day this row belongs to, "YYYY-MM-DD".
+ *
+ * `date` is an IST-midnight INSTANT, which is the right thing to store but the
+ * wrong thing to match on: two thirds of existing rows were written before the
+ * IST helpers existed and sit at local or UTC midnight instead. An equality
+ * lookup misses those, so the caller concludes no row exists and writes a
+ * second one next to the first -- which is how one employee-day ends up with
+ * two records that disagree.
+ *
+ * A string key cannot drift. It is derived here rather than at the call sites
+ * so that every writer gets it without having to remember, and so the unique
+ * index below has something stable to be unique ON.
+ */
+AttendanceSchema.pre('save', function setDayKey(next) {
+    if (this.date) this.dayKey = istDateKey(this.date);
+    next();
+});
+
+/**
+ * `status: 'late'` and `wasLate: false` must never coexist.
+ *
+ * `wasLate` was set in ONE place -- the app's punch-out path -- but `status` is
+ * written by several: the geofence engine's close, the end-of-day job, an admin
+ * correction, regularization approval. Observed 2026-09-17: a day closed by the
+ * geofence engine carried `status: 'late'` with `wasLate: false`, so the record
+ * contradicted itself and payroll's punctuality read disagreed with the badge
+ * the admin saw.
+ *
+ * Enforced here because this is the only point every writer passes through.
+ * It only ever SETS the flag: `wasLate` exists precisely to survive status
+ * being normalised to 'present' on punch-out, so clearing it here would
+ * destroy the signal it was added to preserve.
+ */
+AttendanceSchema.pre('save', function syncPunctuality(next) {
+    if (this.status === 'late') this.wasLate = true;
+    next();
+});
+
+/**
+ * Collapse repeated remarks fragments.
+ *
+ * `remarks` is built by appending ' | <note>' from several places, and the
+ * half-day note is re-appended on EVERY session close. Observed 2026-09-17: one
+ * employee's remarks held six fragments of which three were unique, the same
+ * "Late punch-in... Early punch-out" sentence four times over. Some appenders
+ * guard with `.includes()` and some do not, so the guard has to live where all
+ * of them meet.
+ *
+ * Order is preserved (first occurrence wins) because the fragments read as a
+ * narrative of the day, and a single-fragment value such as 'Work From Home'
+ * is returned untouched -- code elsewhere compares against it exactly.
+ */
+AttendanceSchema.pre('save', function dedupeRemarks(next) {
+    if (typeof this.remarks !== 'string' || !this.remarks.includes('|')) return next();
+    const seen = new Set();
+    const kept = [];
+    for (const raw of this.remarks.split('|')) {
+        const frag = raw.trim();
+        if (!frag || seen.has(frag)) continue;
+        seen.add(frag);
+        kept.push(frag);
+    }
+    this.remarks = kept.join(' | ');
+    next();
+});
+
 AttendanceSchema.index({ adminId: 1, date: 1 });
+AttendanceSchema.index({ adminId: 1, employeeId: 1, dayKey: 1 });
 AttendanceSchema.index({ adminId: 1, employeeId: 1, date: 1 });
 AttendanceSchema.index({ adminId: 1, status: 1 });
 
 module.exports = mongoose.model('Attendance', AttendanceSchema);
+
+// NOTE: the uniqueness guarantee is NOT declared here.
+//
+// A `unique: true` on { adminId, employeeId, dayKey } is the correct end state
+// and the only thing that makes a duplicate employee-day structurally
+// impossible. It is deliberately not switched on in the schema, because
+// Mongoose would try to build it on boot, the build would fail against the
+// duplicate rows that already exist, and the failure would be a log line
+// nobody reads -- leaving everyone believing the guarantee is in place when it
+// is not.
+//
+// Order matters: backfill dayKey, merge the existing duplicates by hand (only
+// a person can say which punch was real), THEN build the index once:
+//
+//   node scratch/migrate_attendance_daykey.js            # report
+//   node scratch/migrate_attendance_daykey.js --backfill # write dayKey
+//   node scratch/migrate_attendance_daykey.js --index    # build unique index

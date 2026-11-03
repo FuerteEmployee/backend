@@ -36,6 +36,30 @@ const SAMPLE_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Offsets a misconfigured terminal realistically lands on, in minutes. */
 const KNOWN_TZ_OFFSETS = [330, 300, 270, 240, 210, 180, 120, 60, 360, 420, 480, 540, 570, 600, 660, 720];
 
+/** Live-push jitter: two taps this close in offset are the same clock. */
+const OFFSET_TOLERANCE_MS = 2 * 60 * 1000;
+
+/**
+ * A first reading that can be believed on sight: a correct clock (about zero)
+ * or a terminal left on UTC (330 min, the IST offset). Only these two: any
+ * other value, including a whole number of hours, is just as likely an offline
+ * backlog that happens to be that old, and goes through confirmation instead
+ * (several live taps agreeing over half an hour).
+ */
+const IST_OFFSET_MS = 330 * 60 * 1000;
+function isPlausibleClockOffset(ms) {
+    return Math.abs(ms) <= OFFSET_TOLERANCE_MS || Math.abs(ms - IST_OFFSET_MS) <= OFFSET_TOLERANCE_MS;
+}
+
+/**
+ * A LARGER offset (the clock fell further behind) is only believed once this
+ * many taps agree on it, received over at least this long. An offline backlog
+ * also arrives "later than the clock says", but all in one burst when the
+ * network returns -- never spread across half an hour of live taps.
+ */
+const CANDIDATE_MIN_TAPS = 3;
+const CANDIDATE_MIN_SPAN_MS = 30 * 60 * 1000;
+
 /**
  * Fold one tap's skew into the device's rolling sample set.
  *
@@ -94,7 +118,114 @@ function describeSkew(minutes) {
     if (tz) {
         return `The terminal's clock is ${span} ${direction} real time — that matches a whole timezone offset, so its timezone setting is wrong rather than its clock having drifted.`;
     }
-    return `The terminal's clock is ${span} ${direction} real time. Every punch it records is wrong by that much.`;
+    return `The terminal's clock is ${span} ${direction} real time. Punches are still stored at the server's time, but its display is wrong by that much.`;
 }
 
-module.exports = { recordClockSkew, describeSkew, SKEW_SUSPECT_MINUTES, KNOWN_TZ_OFFSETS };
+// ─────────────────────────────────────────────────────────────────────────────
+// Server time for every tap.
+//
+// The client's rule: a punch is stored on the SERVER's clock, never on the
+// terminal's. A terminal left on UTC (5h30m behind) is accepted as it is.
+//
+// Storing the arrival time would do that for a tap that arrives at once, but a
+// terminal with no network keeps its taps and sends them later: tapped at 10:45,
+// delivered at 11:12, stored as 11:12 and late. So instead each terminal's
+// clock is converted: server time = terminal time + offset, where the offset is
+// how far that terminal's clock is from ours, learned from its own taps.
+//
+// What makes the offset learnable is that a tap can never arrive before it was
+// made. For every tap, (arrival − terminal time) = offset + delay, delay ≥ 0.
+// A live tap has a delay of seconds, so its value IS the offset; a held-back tap
+// only ever reads LARGER. Hence:
+//   • a smaller reading is always believed at once -- only a live tap, or a
+//     clock that was put right, can produce one;
+//   • a reading within jitter of the offset confirms it;
+//   • a larger reading is a held-back tap, unless several live taps agree on it
+//     over half an hour, which only a clock that fell further behind can do.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fold one tap into the terminal's learned offset. Mutates `device` (the
+ * caller persists the serverOffset* fields). Feed a batch's taps NEWEST first,
+ * so a live tap at the end of an offline backlog anchors the older ones.
+ *
+ * @returns {boolean} whether the offset fields changed
+ */
+function observeServerOffset(device, deviceTime, receivedAt = new Date()) {
+    if (!device || !deviceTime) return false;
+    const at = new Date(receivedAt);
+    const reading = at.getTime() - new Date(deviceTime).getTime();
+    if (!Number.isFinite(reading)) return false;
+
+    const known = Number.isFinite(device.serverOffsetMs) ? device.serverOffsetMs : null;
+
+    const adopt = (ms) => {
+        device.serverOffsetMs = ms;
+        device.serverOffsetConfirmedAt = at;
+        device.serverOffsetCandidate = undefined;
+        return true;
+    };
+
+    // Nothing learned yet. The first reading is believed on sight only when it
+    // can only be a live tap: within jitter of zero (a correct clock) or of a
+    // whole timezone offset (a terminal left on UTC reads 330 min). Anything
+    // else may be an offline backlog, and adopting it shifts every tap in that
+    // backlog to the moment it arrived: a new terminal whose first contact
+    // flushed taps made at 10:00 stored them at 12:00, graded late; one
+    // reconnecting after a week moved a week of taps onto the wrong days. Such a
+    // reading goes through the same confirmation as a clock that fell behind
+    // (several live taps agreeing over half an hour), and until then taps keep
+    // the terminal's own time, which is what they had before this conversion.
+    if (known === null) {
+        if (isPlausibleClockOffset(reading)) return adopt(reading);
+    } else if (reading < known - OFFSET_TOLERANCE_MS) {
+        // Smaller is always believed: only a live tap or a clock put right can
+        // produce it, however long ago the offset was last confirmed.
+        return adopt(reading);
+    } else if (reading <= known + OFFSET_TOLERANCE_MS) {
+        // A live tap. Keep the smaller of the two: delay only ever adds.
+        device.serverOffsetConfirmedAt = at;
+        if (reading < known) device.serverOffsetMs = reading;
+        device.serverOffsetCandidate = undefined;
+        return true;
+    }
+
+    // Arrived later than the known offset allows: a held-back tap, or the
+    // clock fell behind. Only taps agreeing over time can say it was the clock.
+    const c = device.serverOffsetCandidate;
+    if (c && Number.isFinite(c.ms) && Math.abs(reading - c.ms) <= OFFSET_TOLERANCE_MS) {
+        const count = (c.count || 1) + 1;
+        const ms = Math.min(c.ms, reading);
+        if (count >= CANDIDATE_MIN_TAPS && at.getTime() - new Date(c.firstAt).getTime() >= CANDIDATE_MIN_SPAN_MS) {
+            return adopt(ms);
+        }
+        device.serverOffsetCandidate = { ms, firstAt: c.firstAt, count };
+        return true;
+    }
+    device.serverOffsetCandidate = { ms: reading, firstAt: at, count: 1 };
+    return true;
+}
+
+/**
+ * The server-clock instant of a tap the terminal stamped `deviceTime`.
+ *
+ * A manual Clock correction (Super admin > Machines) wins -- somebody set it on
+ * purpose. Otherwise the learned offset. With neither, the terminal's own time.
+ */
+function toServerTime(device, deviceTime) {
+    const t = new Date(deviceTime).getTime();
+    const manual = Number(device?.clockOffsetMinutes) || 0;
+    if (manual !== 0) return new Date(t + manual * 60 * 1000);
+    if (Number.isFinite(device?.serverOffsetMs)) return new Date(t + device.serverOffsetMs);
+    return new Date(t);
+}
+
+module.exports = {
+    recordClockSkew,
+    describeSkew,
+    observeServerOffset,
+    toServerTime,
+    SKEW_SUSPECT_MINUTES,
+    KNOWN_TZ_OFFSETS,
+    OFFSET_TOLERANCE_MS,
+};
