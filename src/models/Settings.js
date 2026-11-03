@@ -81,6 +81,15 @@ const SettingsSchema = new mongoose.Schema({
         //              phones fall back to on_duty on their own (the web layer asks
         //              the native side whether it supports this before using it).
         trackingMode: { type: String, enum: ['on_duty', 'always'], default: 'on_duty' },
+        // Penalty for switching GPS off while on duty (utils/gps_penalty.js).
+        // Built from the phone's own gps_off / gps_on reports, so an admin
+        // approves each one before it reaches a payslip unless autoApprove.
+        gpsOffPenalty: {
+            enabled: { type: Boolean, default: false },
+            graceMinutes: { type: Number, default: 10 },  // shorter switch-offs are ignored
+            amount: { type: Number, default: 0 },         // ₹ per day it happened (at most one a day)
+            autoApprove: { type: Boolean, default: false },
+        },
         // Minutes of grace before a punch-in counts as "late". Was read at
         // attendance_controller but previously missing here (Mongoose strict
         // mode silently dropped it) — now declared so it persists.

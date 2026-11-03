@@ -574,9 +574,11 @@ function sensitiveChanges(current, updateData, files) {
             changed.add('bank');
         }
     }
-    // An uploaded scan can never be "unchanged": it replaces what is on file.
-    if (files?.panCard?.length) changed.add('pan');
-    if (files?.aadhaarCard?.length) changed.add('aadhaar');
+    // An uploaded scan REPLACING one on file is a change. A first scan, with
+    // nothing on file yet, is not: an employee may always add the missing
+    // document, so the admin isn't left collecting photos by hand.
+    if (files?.panCard?.length && current.panCardUrls?.length) changed.add('pan');
+    if (files?.aadhaarCard?.length && current.aadhaarCardUrls?.length) changed.add('aadhaar');
     return changed;
 }
 
@@ -1280,6 +1282,30 @@ exports.updateUser = async (req, res) => {
             { _id: req.params.id, adminId: new mongoose.Types.ObjectId(req.adminId), role: 'employee' },
             updateData,
             { new: true, runValidators: true }
+        );
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        res.json(publicEmployee(user));
+    } catch (error) {
+        const { status, message } = employeeSaveError(error);
+        res.status(status).json({ message });
+    }
+};
+
+// PUT /users/employees/:id/documents (multipart: panCard, aadhaarCard, up to 2
+// each). The admin adds or replaces an employee's PAN/Aadhaar scans; a field
+// that is sent replaces what is on file, one that is not is left alone.
+exports.updateEmployeeDocuments = async (req, res) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(404).json({ message: 'User not found' });
+        const set = {};
+        if (req.files?.panCard?.length) set.panCardUrls = req.files.panCard.map(f => f.path);
+        if (req.files?.aadhaarCard?.length) set.aadhaarCardUrls = req.files.aadhaarCard.map(f => f.path);
+        if (!Object.keys(set).length) return res.status(400).json({ message: 'Choose a PAN or Aadhaar photo to upload.' });
+
+        const user = await User.findOneAndUpdate(
+            { _id: req.params.id, adminId: new mongoose.Types.ObjectId(req.adminId), role: 'employee' },
+            { $set: set },
+            { new: true }
         );
         if (!user) return res.status(404).json({ message: 'User not found' });
         res.json(publicEmployee(user));

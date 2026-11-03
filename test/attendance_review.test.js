@@ -1804,6 +1804,109 @@ section('flexible hours');
     });
 }
 
+section('lunch taken outside, and hourly pay');
+{
+    const { workedMsForPay } = require('../src/utils/shift_status');
+    // Offixnest (Nov 2026): 09:00-20:30, a fixed 45 min lunch for everyone. Staff
+    // without a tiffin punch out, eat outside and punch back in.
+    const OFFIX = { startTime: '09:00', endTime: '20:30', flexibleHours: true, fullDayMins: 570, lunch: { mode: 'fixed_duration', durationMins: 45 } };
+    const FIXED45 = { ...OFFIX, flexibleHours: false };
+    const CO = { attendance: { minLunch: 30 } };
+    const H = (ms) => Math.round(ms / 60000);
+    const day = (sessions, lunch) => {
+        const s = sessions.map(([a, b, c, d]) => ({ punchIn: new Date(T(a, b)), punchOut: new Date(T(c, d)) }));
+        return {
+            date: new Date(SEP16_IST_MIDNIGHT), punchIn: s[0].punchIn, punchOut: s[s.length - 1].punchOut, shifts: s,
+            lunchInTime: lunch ? new Date(T(lunch[0], lunch[1])) : null, lunchOutTime: lunch ? new Date(T(lunch[2], lunch[3])) : null,
+        };
+    };
+
+    test('one session, no punched lunch: the fixed 45 min is deducted (unchanged)', () => {
+        assert.equal(H(computeWorkedMs(day([[9, 0, 20, 30]]), OFFIX, CO)), 11 * 60 + 30 - 45);
+        assert.equal(H(computeWorkedMs(day([[9, 0, 20, 30]]), FIXED45, CO)), 11 * 60 + 30 - 45);
+    });
+
+    test('punched out 60 min for lunch: nothing more is deducted (was 45 min on top)', () => {
+        const att = day([[9, 0, 13, 0], [14, 0, 20, 30]]);
+        assert.equal(H(computeWorkedMs(att, OFFIX, CO)), 10 * 60 + 30);
+        assert.equal(H(computeWorkedMs(att, FIXED45, CO)), 10 * 60 + 30);
+    });
+
+    test('punched out only 30 min: the other 15 min of the 45 are deducted', () => {
+        const att = day([[9, 0, 13, 0], [13, 30, 20, 30]]);
+        assert.equal(H(computeWorkedMs(att, OFFIX, CO)), 11 * 60 - 15);
+    });
+
+    test('company minimum (inherit): time already away counts toward it', () => {
+        const SH = { startTime: '09:00', endTime: '18:00' };
+        assert.equal(H(computeWorkedMs(day([[9, 0, 13, 0], [13, 45, 18, 0]]), SH, CO)), 8 * 60 + 15);   // away 45 >= 30
+        assert.equal(H(computeWorkedMs(day([[9, 0, 13, 0], [13, 10, 18, 0]]), SH, CO)), 8 * 60 + 50 - 20); // away 10, 20 more
+        assert.equal(H(computeWorkedMs(day([[9, 0, 18, 0]], [13, 0, 13, 40]), SH, CO)), 9 * 60 - 40);   // punched lunch, unchanged
+    });
+
+    test('hourly pay counts the hours the day was credited, not punch-in to last punch-out', () => {
+        const days = [
+            day([[9, 0, 13, 0], [14, 0, 20, 30]]),           // 10h30
+            day([[9, 0, 20, 30]]),                            // 10h45 (45 min lunch)
+            { ...day([[9, 0, 9, 1]]), shifts: [{ punchIn: new Date(T(9, 0)) }], punchOut: null }, // still open: 0
+        ];
+        assert.equal(H(workedMsForPay(days, OFFIX, CO)), 10 * 60 + 30 + 10 * 60 + 45);
+        assert.equal(workedMsForPay([], OFFIX, CO), 0);
+    });
+}
+
+section('GPS-off penalty');
+{
+    const { gpsOffIncidents, worstPerDay } = require('../src/utils/gps_penalty');
+    const ev = (type, h, m) => ({ type, at: new Date(T(h, m)) });
+    const ses = (a, b, c, d) => ({ punchIn: new Date(T(a, b)), punchOut: c === null ? null : new Date(T(c, d)) });
+    const M = (i) => i.map((x) => x.minutes);
+
+    test('off 13:00, on 13:30 inside the day: one 30-minute incident', () => {
+        const r = gpsOffIncidents([ev('gps_off', 13, 0), ev('gps_on', 13, 30)], [ses(9, 0, 18, 0)], { graceMinutes: 10 });
+        assert.deepEqual(M(r), [30]);
+        assert.equal(r[0].offAt.getTime(), T(13, 0));
+    });
+
+    test('shorter than the grace is ignored', () => {
+        assert.deepEqual(gpsOffIncidents([ev('gps_off', 13, 0), ev('gps_on', 13, 9)], [ses(9, 0, 18, 0)], { graceMinutes: 10 }), []);
+    });
+
+    test('only the on-duty part counts: off at lunch while punched out is not a penalty', () => {
+        const days = [ses(9, 0, 13, 0), ses(14, 0, 18, 0)];
+        assert.deepEqual(gpsOffIncidents([ev('gps_off', 13, 5), ev('gps_on', 13, 55)], days, { graceMinutes: 10 }), []);
+        // Off 12:50 to 14:20: 10 min before the punch-out and 20 after the punch-in.
+        assert.deepEqual(M(gpsOffIncidents([ev('gps_off', 12, 50), ev('gps_on', 14, 20)], days, { graceMinutes: 10 })), [10, 20]);
+    });
+
+    test('off after punch-out is not a penalty; already off at punch-in counts from the punch-in', () => {
+        assert.deepEqual(gpsOffIncidents([ev('gps_off', 18, 30), ev('gps_on', 21, 0)], [ses(9, 0, 18, 0)], { graceMinutes: 10 }), []);
+        assert.deepEqual(M(gpsOffIncidents([ev('gps_off', 8, 0), ev('gps_on', 9, 40)], [ses(9, 0, 18, 0)], { graceMinutes: 10 })), [40]);
+    });
+
+    test('never switched back on: counts until punch-out; still on duty and still off: not yet', () => {
+        assert.deepEqual(M(gpsOffIncidents([ev('gps_off', 16, 0)], [ses(9, 0, 18, 0)], { graceMinutes: 10 })), [120]);
+        assert.deepEqual(gpsOffIncidents([ev('gps_off', 16, 0)], [ses(9, 0, null)], { graceMinutes: 10 }), []);
+    });
+
+    test('repeated off reports keep the first; an on without an off is ignored', () => {
+        const r = gpsOffIncidents([ev('gps_on', 10, 0), ev('gps_off', 11, 0), ev('gps_off', 11, 20), ev('gps_on', 11, 45)], [ses(9, 0, 18, 0)], { graceMinutes: 10 });
+        assert.deepEqual(M(r), [45]);
+    });
+
+    test('events out of order are sorted by their own time', () => {
+        assert.deepEqual(M(gpsOffIncidents([ev('gps_on', 13, 30), ev('gps_off', 13, 0)], [ses(9, 0, 18, 0)], { graceMinutes: 10 })), [30]);
+    });
+
+    test('several in one day: one penalty, the longest', () => {
+        const r = gpsOffIncidents([ev('gps_off', 10, 0), ev('gps_on', 10, 20), ev('gps_off', 15, 0), ev('gps_on', 15, 50)], [ses(9, 0, 18, 0)], { graceMinutes: 10 });
+        const d = worstPerDay(r);
+        assert.equal(d.length, 1);
+        assert.equal(d[0].minutes, 50);
+        assert.equal(d[0].dayKey, istDateKey(new Date(T(15, 0))));
+    });
+}
+
 (async () => {
     for (const t of asyncTests) {
         try {

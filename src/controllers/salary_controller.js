@@ -11,6 +11,8 @@ const mongoose = require('mongoose');
 const { isWeeklyOff, istDateKey, istCalendarDate, istMonthRange, toLocalDateKey } = require('../utils/attendance_helpers');
 const { runEngine, applyRounding, validateSalary, buildLeaveMap } = require('../utils/payroll_engine');
 const { withEmployeeLock } = require('../utils/employee_lock');
+const { workedMsForPay } = require('../utils/shift_status');
+const { syncGpsPenalties, approvedPenaltyTotal } = require('../utils/gps_penalty');
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
@@ -38,7 +40,7 @@ const MAX_SALARY_AMOUNT = 10000000;
 // When settings.payroll.enabled === true the deterministic engine runs and
 // returns an enriched payload (buckets, payableDays, needsReview, etc.).
 // When false the legacy calculation path runs verbatim — no surprise changes.
-exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount = 0, reimbursementAmount = 0) => {
+exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount = 0, reimbursementAmount = 0, gpsPenalty = { count: 0, amount: 0 }) => {
     month = Number(month);
     year = Number(year);
     const totalDaysInMonth = new Date(year, month, 0).getDate();
@@ -177,6 +179,16 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         if (overtimeAmount > 0 && payableDays > 0) {
             earnings.push({ name: overtimeLabel, amount: overtimeAmount, included: true });
             addedOnTop += overtimeAmount;
+        }
+
+        // Approved GPS-off penalties (utils/gps_penalty.js). Never more than
+        // what is left of the pay, so a penalty cannot push net pay below zero.
+        if (gpsPenalty.amount > 0) {
+            const amt = Math.min(gpsPenalty.amount, Math.max(0, earnedBase + addedOnTop - totalDeductions));
+            if (amt > 0) {
+                deductions.push({ name: `GPS-off penalty (${gpsPenalty.count} day${gpsPenalty.count === 1 ? '' : 's'})`, amount: amt, included: true });
+                totalDeductions += amt;
+            }
         }
 
         const grossSalary = earnedBase + addedOnTop;
@@ -370,6 +382,13 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     let earnedBase = 0;
     let payTypeRemark = '';
 
+    // Hours are measured against the employee's shift (lunch, flexible hours).
+    // Some recalc callers pass an employee whose shiftId is a bare id.
+    let payShift = emp.shiftId;
+    if (employmentType !== 'monthly' && payShift && !payShift.startTime && mongoose.Types.ObjectId.isValid(String(payShift))) {
+        payShift = await require('../models/Shift').findOne({ _id: payShift, adminId }).lean();
+    }
+
     if (employmentType === 'monthly') {
         const perDaySalary = (emp.salary || 0) / totalDaysInMonth;
         earnedBase = Math.round(perDaySalary * payableDays);
@@ -378,8 +397,10 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         const reqHours = settings?.attendance?.reqHours || 8;
         let totalHoursWorked = 0;
         attendanceRecords.forEach(rec => {
+            // Credited time (sessions, lunch, shift rules), as the screens show
+            // it. Punch-in to punch-out paid lunch and dropped later sessions.
             if (rec.punchIn && rec.punchOut) {
-                totalHoursWorked += (rec.punchOut - rec.punchIn) / (1000 * 60 * 60);
+                totalHoursWorked += workedMsForPay([rec], payShift, settings) / (1000 * 60 * 60);
             } else if (rec.status === 'present' || rec.status === 'late') {
                 totalHoursWorked += reqHours;
             } else if (rec.status === 'half-day') {
@@ -390,12 +411,9 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
         earnedBase = Math.round((emp.salary || 0) * actualDaysWorkedByHours);
         payTypeRemark = `Daily | Days Worked: ${actualDaysWorkedByHours} (${totalHoursWorked.toFixed(1)} hrs / ${reqHours} req)`;
     } else if (employmentType === 'hourly') {
-        let totalHoursWorked = 0;
-        attendanceRecords.forEach(rec => {
-            if (rec.punchIn && rec.punchOut) {
-                totalHoursWorked += (rec.punchOut - rec.punchIn) / (1000 * 60 * 60);
-            }
-        });
+        // Credited time, the same figure the attendance screens show: every
+        // session, lunch taken off, shift rules applied.
+        const totalHoursWorked = workedMsForPay(attendanceRecords, payShift, settings) / (1000 * 60 * 60);
         earnedBase = Math.round((emp.salary || 0) * totalHoursWorked);
         payTypeRemark = `Hourly | Hours Worked: ${totalHoursWorked.toFixed(2)}`;
     }
@@ -465,6 +483,16 @@ exports.computeSalary = async (adminId, emp, month, year, advanceDeductionAmount
     if (overtimeAmount > 0 && payableDays > 0) {
         earnings.push({ name: overtimeLabel, amount: overtimeAmount, included: true });
         addedOnTop += overtimeAmount;
+    }
+
+    // Approved GPS-off penalties (utils/gps_penalty.js). Never more than
+    // what is left of the pay, so a penalty cannot push net pay below zero.
+    if (gpsPenalty.amount > 0) {
+        const amt = Math.min(gpsPenalty.amount, Math.max(0, earnedBase + addedOnTop - totalDeductions));
+        if (amt > 0) {
+            deductions.push({ name: `GPS-off penalty (${gpsPenalty.count} day${gpsPenalty.count === 1 ? '' : 's'})`, amount: amt, included: true });
+            totalDeductions += amt;
+        }
     }
 
     const grossSalary = earnedBase + addedOnTop;
@@ -550,7 +578,20 @@ exports.calculateAndSaveSalary = async (adminId, emp, month, year, advanceReques
     expenses = expenses.filter((e) => e.amount <= ADVANCE_CAP);
     const reimbursementAmount = expenses.reduce((sum, e) => sum + e.amount, 0);
 
-    const r = await exports.computeSalary(adminId, emp, month, year, advanceDeductionAmount, reimbursementAmount);
+    // GPS-off penalties: bring this month's rows up to date from the phone's
+    // reports, then deduct the approved ones. A failure here must never stop
+    // a salary from being calculated, so it only costs the deduction.
+    let gpsPenalty = { count: 0, amount: 0 };
+    try {
+        const { start, end } = istMonthRange(Number(year), Number(month));
+        const now = new Date();
+        if (start <= now) await syncGpsPenalties(adminId, { from: start, to: end < now ? end : now, employeeId: emp._id });
+        gpsPenalty = await approvedPenaltyTotal(adminId, emp._id, Number(year), Number(month));
+    } catch (err) {
+        console.error('[salary] GPS-off penalties skipped:', err.message);
+    }
+
+    const r = await exports.computeSalary(adminId, emp, month, year, advanceDeductionAmount, reimbursementAmount, gpsPenalty);
 
     const now = new Date();
     const today = istToday();

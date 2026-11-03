@@ -14,6 +14,7 @@ const {
     getCoworkers,
     createUser,
     updateUser,
+    updateEmployeeDocuments,
     updateProfile,
     deleteUser,
     getAdminUsers,
@@ -25,6 +26,23 @@ const { protect, adminOnly, panelOnly, checkPermission } = require('../middlewar
 const { checkSubscription } = require('../middleware/subscription.middleware');
 const { upload, uploadIdDocument } = require('../config/cloudinary');
 
+// PAN/Aadhaar scans (front and back). Upload errors come back in plain words
+// rather than as a 500 carrying Cloudinary's text.
+const ID_DOCUMENT_FIELDS = [{ name: 'panCard', maxCount: 2 }, { name: 'aadhaarCard', maxCount: 2 }];
+const uploadIdScans = (req, res, next) => uploadIdDocument.fields(ID_DOCUMENT_FIELDS)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({ message: 'Attach at most 2 photos each for PAN and Aadhaar (front and back).' });
+    }
+    if (/format|file type/i.test(err.message || '')) {
+        return res.status(400).json({ message: 'This file type cannot be attached. Please attach a photo (JPG, PNG, WebP) or a PDF.' });
+    }
+    if (/invalid image/i.test(err.message || '')) {
+        return res.status(400).json({ message: 'This photo could not be read. Please take the photo again.' });
+    }
+    return next(err);
+});
+
 // --- Auth Routes ---
 router.post('/login-request', loginRequest); // Request OTP for login via phone
 router.post('/verify-otp', verifyOtp); // Verify OTP and receive JWT token
@@ -35,8 +53,7 @@ router.get('/subscription/invoices', protect, adminOnly, getMyInvoices); // The 
 router.post('/verify-add-employee', protect, verifyBotlensCredentials); // Re-confirm admin identity before BOTLens adds an employee (not subscription-gated)
 router.put('/profile', protect, uploadIdDocument.fields([
     { name: 'logo', maxCount: 1 },
-    { name: 'panCard', maxCount: 2 },
-    { name: 'aadhaarCard', maxCount: 2 },
+    ...ID_DOCUMENT_FIELDS,
 ]), updateProfile); // Update logged-in user profile, incl. PAN/Aadhaar scans
 
 // --- User Management (Protected) ---
@@ -56,6 +73,7 @@ router.get('/employees/usage', panelOnly, getEmployeeUsage); // Seats used vs th
 router.get('/coworkers', getCoworkers); // Minimal id+name colleague list (e.g. for bill-split pickers)
 router.post('/employees', panelOnly, checkPermission('employees', 'create'), createUser); // Create a new employee record
 router.put('/employees/:id', panelOnly, checkPermission('employees', 'edit'), updateUser); // Update specific employee details by ID
+router.put('/employees/:id/documents', panelOnly, checkPermission('employees', 'edit'), uploadIdScans, updateEmployeeDocuments); // Admin uploads PAN/Aadhaar scans for an employee
 router.delete('/employees/:id', panelOnly, checkPermission('employees', 'delete'), deleteUser); // Delete a specific employee record
 
 // Subadmin management (admin only — sub-admins cannot manage other sub-admins)

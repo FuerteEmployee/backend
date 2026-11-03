@@ -479,7 +479,42 @@ function lunchDeductionMs(attendance, settings, shift, grossMs = null) {
     const configuredMs = p.durationMs || 0;
     if (!configuredMs) return punchedMs;
     const base = p.mode === 'fixed_duration' ? configuredMs : Math.max(punchedMs, configuredMs);
-    return clampLunchToPresence(base, punchedMs, attendance, shift, grossMs);
+    // Time already spent punched OUT between sessions is unpaid, and counts
+    // toward the break. Someone who punched out 13:00-14:00 to eat outside had
+    // their hour of lunch; deducting the configured 45 min on top of it took
+    // the break twice (Fuerte, 30 Sept; Offixnest asked for exactly this case).
+    const awayMs = gapsBetweenSessionsMs(attendance, shift);
+    if (awayMs <= 0) return clampLunchToPresence(base, punchedMs, attendance, shift, grossMs);
+    const rest = p.mode === 'fixed_duration'
+        ? Math.max(0, configuredMs - awayMs)
+        : Math.max(punchedMs, configuredMs - awayMs);
+    return clampLunchToPresence(rest, punchedMs, attendance, shift, grossMs);
+}
+
+/** Unpaid time between the day's credited sessions (punched out, then back in). */
+function gapsBetweenSessionsMs(attendance, shift) {
+    const spans = allSessions(attendance)
+        .map((s) => sessionCreditInterval(s, attendance, shift))
+        .filter(Boolean)
+        .sort((a, b) => a[0] - b[0]);
+    let away = 0;
+    let end = null;
+    for (const [a, b] of spans) {
+        if (end !== null && a > end) away += a - end;
+        end = end === null ? b : Math.max(end, b);
+    }
+    return away;
+}
+
+/**
+ * Worked time to pay an hourly (or daily) employee for: the sum of each day's
+ * credited time, exactly as the attendance screens show it. Open days count 0
+ * until they close.
+ */
+function workedMsForPay(attendanceRecords, shift, settings) {
+    let total = 0;
+    for (const rec of attendanceRecords || []) total += computeWorkedMs(rec, shift, settings);
+    return total;
 }
 
 /**
@@ -708,6 +743,7 @@ module.exports = {
     computeSessionGrossMs,
     shiftWindow,
     lunchDeductionMs,
+    workedMsForPay,
     resolveLunchPolicy,
     scheduledLunchMs,
     resolveGraceMs,

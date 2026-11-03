@@ -4,6 +4,7 @@ const { updateLocation, updateLocationBatch, getLatestLocations, getHistory, get
 const { protect, panelOnly, checkPermission } = require('../middleware/auth.middleware');
 const { checkModuleAccess } = require('../middleware/subscription.middleware');
 const { checkFeatureToggle } = require('../utils/feature_toggles');
+const { listGpsPenalties, decideGpsPenalty } = require('../controllers/gps_penalty_controller');
 
 router.use(protect);
 router.use(checkModuleAccess('gpsTracking'));
@@ -23,5 +24,7 @@ router.get('/held-fixes', panelOnly, checkPermission('tracking', 'view'), getHel
 router.get('/stats', panelOnly, checkPermission('tracking', 'view'), getStats); // Bundled counts for the Tracking page's stat cards
 router.post('/ping/:employeeId', panelOnly, checkPermission('tracking', 'edit'), requestPing); // Admin asks a device for a fresh fix right now
 router.get('/ping-check', checkPing); // The employee's own device polls for a pending ping
+router.get('/gps-penalties', panelOnly, checkPermission('tracking', 'view'), listGpsPenalties); // GPS switched off on duty, for the month (synced from the phones' reports first)
+router.patch('/gps-penalties/:id', panelOnly, checkPermission('tracking', 'edit'), decideGpsPenalty); // Approve / waive one; re-calculates that month's salary if it exists
 
 module.exports = router;
