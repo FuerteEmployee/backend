@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Tracking = require('../models/Tracking');
+const ApproxLocation = require('../models/ApproxLocation');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Department = require('../models/Department');
@@ -53,6 +54,7 @@ async function isTrackingAllowed(employeeId) {
     trackingAllowedCache.set(key, { allowed, at: Date.now() });
     return allowed;
 }
+exports.isTrackingAllowed = isTrackingAllowed;
 
 /**
  * Per-employee budget for the single-fix endpoint.
@@ -486,6 +488,30 @@ exports.getLatestLocations = async (req, res) => {
     }
 };
 
+// What the admin map is shown of an ApproxLocation. The address itself stays
+// on the server.
+const APPROX_FIELDS = 'employeeId timestamp latitude longitude accuracyM city region country trigger plausible';
+
+// Each employee's newest city-level reading from the last 24 h. The map shows
+// it only when it is newer than that employee's last GPS fix.
+exports.getApproxLatest = async (req, res) => {
+    try {
+        const rows = await ApproxLocation.aggregate([
+            { $match: {
+                adminId: new mongoose.Types.ObjectId(req.adminId),
+                timestamp: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+            } },
+            { $sort: { adminId: 1, employeeId: 1, timestamp: -1 } },
+            { $group: { _id: '$employeeId', latest: { $first: '$$ROOT' } } },
+        ]);
+        const keep = APPROX_FIELDS.split(' ');
+        res.json(rows.map(({ latest }) => Object.fromEntries(keep.map((k) => [k, latest[k] ?? null]))));
+    } catch (error) {
+        console.error('[tracking]', error.message);
+        res.status(500).json({ message: 'Could not load tracking data. Try again.' });
+    }
+};
+
 // Haversine distance (km) between two lat/lng points.
 function distanceKm(a, b) {
     const R = 6371;
@@ -529,7 +555,16 @@ exports.getHistory = async (req, res) => {
         // utils/track_smoothing.js for the calibration.
         const { path, distanceM, rawDistanceM, rawCount } = smoothTrack(points);
 
+        // City-level readings from the network address while GPS was off.
+        // Returned beside the route, never merged into it or into the distance.
+        const approxPoints = await ApproxLocation.find({
+            adminId: req.adminId,
+            employeeId: emp._id,
+            timestamp: { $gte: dayStart, $lte: dayEnd }
+        }).sort({ timestamp: 1 }).select(APPROX_FIELDS).lean();
+
         res.json({
+            approxPoints,
             points: path,
             distanceKm: Math.round((distanceM / 1000) * 100) / 100,
             // Kept visible rather than quietly dropped: an admin comparing this

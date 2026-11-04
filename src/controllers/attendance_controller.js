@@ -23,6 +23,7 @@ const { isFrozenTenant, sendFrozen } = require('../utils/frozen_tenants');
 const { lateArrival } = require('../utils/late_arrival');
 const { rebuildAfterAppPunch } = require('../utils/tap_ingest');
 const { checkPunchFace } = require('../utils/punch_face_check');
+const { recordIpLocation } = require('../utils/ip_tracking');
 
 // A day field the person just set in the app is theirs, not a reading of a
 // machine or face tap: take it off the list the day rebuild treats as its own
@@ -792,6 +793,13 @@ exports.getToday = async (req, res) => {
         // half way through an afternoon.
         if (attendance && attendance.punchOut && attendance.punchOutIsProvisional) {
             attendance.punchOut = null;
+        }
+
+        // While the phone is tracking, this poll keeps arriving even with GPS
+        // off, so its address gives a city-level fallback (utils/ip_tracking.js).
+        // Not awaited: it must never slow down or fail this answer.
+        if ((attendance?.punchIn && !attendance.punchOut) || trackAlways) {
+            recordIpLocation(req, 'poll');
         }
 
         // Unchanged for "on duty": the same row, or null. For "always" the flag is

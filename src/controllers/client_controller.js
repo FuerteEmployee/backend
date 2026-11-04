@@ -3,6 +3,7 @@ const ClientDevice = require('../models/ClientDevice');
 const ClientError = require('../models/ClientError');
 const TrackerEvent = require('../models/TrackerEvent');
 const LoginSession = require('../models/LoginSession');
+const { recordIpLocation } = require('../utils/ip_tracking');
 
 const { PERMISSION_STATES } = ClientDevice;
 
@@ -287,6 +288,16 @@ exports.reportTrackerEvents = async (req, res) => {
         if (toWrite.length > 0) {
             // ordered:false so one bad row cannot discard the rest of the batch.
             await TrackerEvent.insertMany(toWrite, { ordered: false });
+        }
+
+        // GPS just went off: take a city-level reading from this request's
+        // address now (utils/ip_tracking.js). Only when the newest GPS event in
+        // the batch is a recent gps_off -- an old one flushed from the offline
+        // queue says nothing about where the phone is today. Not awaited.
+        const gpsEvents = toWrite.filter((r) => r.type === 'gps_off' || r.type === 'gps_on');
+        const newestGps = gpsEvents.reduce((a, b) => (!a || b.at > a.at ? b : a), null);
+        if (newestGps?.type === 'gps_off' && now - newestGps.at.getTime() < 5 * 60 * 1000) {
+            recordIpLocation(req, 'gps_off');
         }
 
         res.status(201).json({

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { updateLocation, updateLocationBatch, getLatestLocations, getHistory, getHeldFixes, getStats, requestPing, checkPing } = require('../controllers/tracking_controller');
+const { updateLocation, updateLocationBatch, getLatestLocations, getApproxLatest, getHistory, getHeldFixes, getStats, requestPing, checkPing } = require('../controllers/tracking_controller');
 const { protect, panelOnly, checkPermission } = require('../middleware/auth.middleware');
 const { checkModuleAccess } = require('../middleware/subscription.middleware');
 const { checkFeatureToggle } = require('../utils/feature_toggles');
@@ -19,6 +19,7 @@ router.post('/update/batch', updateLocationBatch); // Bulk flush from the native
 // checkPermission('tracking', ...) is what limits a sub-admin to what the
 // Sub-admins page granted them; it passes admins straight through.
 router.get('/latest', panelOnly, checkPermission('tracking', 'view'), getLatestLocations); // Admin view of latest locations for all active employees
+router.get('/approx-latest', panelOnly, checkPermission('tracking', 'view'), getApproxLatest); // City-level location from the network address while GPS is off (utils/ip_location.js)
 router.get('/history', panelOnly, checkPermission('tracking', 'view'), getHistory); // One employee's full route for a day (for the map polyline)
 router.get('/held-fixes', panelOnly, checkPermission('tracking', 'view'), getHeldFixes); // Fixes delivered late -- the offline backlog, proving what was recovered rather than lost
 router.get('/stats', panelOnly, checkPermission('tracking', 'view'), getStats); // Bundled counts for the Tracking page's stat cards
